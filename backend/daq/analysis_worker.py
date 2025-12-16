@@ -1,0 +1,168 @@
+import threading
+import time
+import queue
+import numpy as np
+
+from .analysis import fatigue_damage, acc_to_disp
+from . import iot
+
+
+class AnalysisWorker:
+    """
+    Consumes sample batches, performs stats + fatigue analysis, writes logs via DamageLogger.
+    """
+    def __init__(self, device_name, sample_rate, log_interval, damage_logger, channels_cfg=None):
+        self.device_name = device_name
+        self.sample_rate = sample_rate
+        self.log_interval = log_interval
+        self.damage_logger = damage_logger
+        self.channels_cfg = channels_cfg or []
+
+        self.queue = queue.Queue(maxsize=3)
+        self.thread = None
+        self.running = False
+
+        self.log_window_start = time.time()
+        self.log_stats = []
+        self.analysis_buffers = [[] for _ in (self.channels_cfg or [None, None])]
+        self.last_fatigue = None
+
+    def start(self):
+        if self.running:
+            return
+        self.running = True
+        self.thread = threading.Thread(target=self._loop, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=1.0)
+            self.thread = None
+
+    def submit(self, data):
+        try:
+            self.queue.put_nowait(data)
+        except queue.Full:
+            try:
+                self.queue.get_nowait()
+                self.queue.put_nowait(data)
+            except Exception:
+                pass
+
+    def _ensure_stats_len(self, n):
+        while len(self.log_stats) < n:
+            self.log_stats.append({"min": float("inf"), "max": float("-inf"), "sumsq": 0.0, "count": 0})
+
+    def _accumulate_stats(self, data):
+        self._ensure_stats_len(len(data))
+        for idx, ch_data in enumerate(data):
+            st = self.log_stats[idx]
+            if not ch_data:
+                continue
+            try:
+                st["max"] = max(st["max"], max(ch_data))
+                st["min"] = min(st["min"], min(ch_data))
+                st["sumsq"] += sum(x * x for x in ch_data)
+                st["count"] += len(ch_data)
+            except Exception:
+                pass
+
+    def _compute_disp_stats(self):
+        disp_stats = []
+        for idx, arr in enumerate(self.analysis_buffers):
+            if not arr:
+                disp_stats.append({"max": 0.0, "min": 0.0})
+                continue
+            unit = ""
+            try:
+                unit = (self.channels_cfg[idx].get("unit") or "").lower()
+            except Exception:
+                unit = ""
+            data = np.asarray(arr, dtype=float)
+            if unit == "g":
+                data = data * 9.80665
+            disp = acc_to_disp(data, fs=self.sample_rate)
+            if disp.size:
+                disp_stats.append({"max": float(np.max(disp)), "min": float(np.min(disp))})
+            else:
+                disp_stats.append({"max": 0.0, "min": 0.0})
+        return disp_stats
+
+    def _loop(self):
+        while self.running:
+            try:
+                data = self.queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            now = time.time()
+            self._accumulate_stats(data)
+
+            # accumulate for fatigue on ch0/ch1
+            if len(data) >= 2:
+                try:
+                    self.analysis_buffers[0].extend(data[0])
+                    self.analysis_buffers[1].extend(data[1])
+                except Exception:
+                    pass
+
+            if now - self.log_window_start >= self.log_interval:
+                start_ts = self.log_window_start
+                self.log_window_start = now
+                fatigue = None
+                try:
+                    ax = np.array(self.analysis_buffers[0], dtype=float)
+                    ay = np.array(self.analysis_buffers[1], dtype=float)
+                    fatigue = fatigue_damage(
+                        ax, ay,
+                        fs=self.sample_rate,
+                        k_disp2stress=90.62 / 0.4,
+                        et=2.05e5
+                    )
+                    import datetime
+                    fatigue["timestamp"] = datetime.datetime.fromtimestamp(now).isoformat()
+                    fatigue["device"] = self.device_name
+                    fatigue = self.damage_logger.update_cumulative(
+                        fatigue,
+                        ts=datetime.datetime.fromtimestamp(now)
+                    )
+                    self.last_fatigue = fatigue
+                except Exception as e:
+                    print(f"[{self.device_name}] fatigue error:", e)
+
+                self.damage_logger.write_window(
+                    device_name=self.device_name,
+                    stats=self.log_stats,
+                    fatigue=fatigue,
+                    start_ts=start_ts
+                )
+
+                try:
+                    disp_stats = self._compute_disp_stats()
+                    cum = self.damage_logger.cum_damage or []
+                    cum_phi = self.damage_logger.cum_phi or []
+                    payload = {
+                        "device": self.device_name,
+                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(now)),
+                        "channels": [
+                            {
+                                "ch": i,
+                                "acc_max": s["max"],
+                                "acc_min": s["min"],
+                                "disp_max": disp_stats[i]["max"] if i < len(disp_stats) else None,
+                                "disp_min": disp_stats[i]["min"] if i < len(disp_stats) else None,
+                            }
+                            for i, s in enumerate(self.log_stats)
+                        ],
+                        "fatigue_cumulative": {
+                            "phi_deg_list": cum_phi,
+                            "D_phi_cum": cum,
+                        }
+                    }
+                    iot.publish(payload)
+                except Exception as e:
+                    print(f"[{self.device_name}] iot publish error:", e)
+
+                self.log_stats = []
+                self.analysis_buffers = [[] for _ in (self.channels_cfg or [None, None])]

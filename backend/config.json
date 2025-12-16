@@ -1,0 +1,68 @@
+{
+  "effective_sample_rate": 1600,
+  "sample_rate": 1600,
+  "samples_per_read": 1600,
+  "fft_interval": 0.5,
+  "devices": {
+    "cDAQ3": {
+      "channels": [
+        {
+          "id": 0,
+          "enabled": true,
+          "coupling": "DC",
+          "type": "acc",
+          "unit": "g",
+          "sensitivity": 80,
+          "iepe": false,
+          "remark": "X-axis"
+        },
+        {
+          "id": 1,
+          "enabled": true,
+          "coupling": "DC",
+          "type": "acc",
+          "unit": "g",
+          "sensitivity": 1,
+          "iepe": false,
+          "remark": "Y-axis"
+        },
+        {
+          "id": 2,
+          "enabled": false,
+          "coupling": "DC",
+          "type": "acc",
+          "unit": "g",
+          "sensitivity": 1,
+          "iepe": false,
+          "remark": "Y-axis"
+        }
+      ],
+      "model": "cDAQ3Mod1",
+      "display_name": "cDAQ3"
+    }
+  },
+  "iot": {
+    "type": "mqtt",
+    "host": "a3bu3p0y1xuf8q.ats.iot.cn-north-1.amazonaws.com.cn",
+    "port": 8883,
+    "topic": "tower/data",
+    "client_id": "TowerMonitor1",
+    "username": "",
+    "password": "",
+    "ca_cert": "backend/license/AmazonRootCA1.pem",
+    "certfile": "backend/license/f4f0d80e076beaeb6a907702e5e59fa5a6018f0b359d6c09de81ee14f784f52f-certificate.pem.crt",
+    "keyfile": "backend/license/f4f0d80e076beaeb6a907702e5e59fa5a6018f0b359d6c09de81ee14f784f52f-private.pem.key"
+  },
+  "wind": {
+    "enabled": true,
+    "mode": "sim",
+    "rs485": {
+      "baudrate": 9600,
+      "port": "COM3",
+      "slave_id": 1
+    },
+    "sample_interval_s": 1,
+    "sim_seed": 1,
+    "stats_interval_s": 600
+  }
+}
