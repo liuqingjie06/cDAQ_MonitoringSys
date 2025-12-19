@@ -5,4 +5,3 @@ python-engineio>=4.5
 nidaqmx>=0.8
 numpy>=1.24
 paho-mqtt>=1.6
-nptdms>=1.10

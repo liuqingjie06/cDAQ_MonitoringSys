@@ -3,6 +3,7 @@ from flask_socketio import SocketIO
 
 from config import load_config, save_config
 from daq.manager import DeviceManager
+from daq.storage_worker import StorageService
 from daq import iot
 from sensors.wind import WindService
 import copy
@@ -17,6 +18,7 @@ sys_cfg = {}
 devices_cfg = {}
 device_manager: DeviceManager | None = None
 wind_service: WindService | None = None
+storage_service: StorageService | None = None
 
 
 def _detect_devices_console():
@@ -135,7 +137,7 @@ def _detect_and_merge_devices(cfg: dict) -> dict:
 
 def apply_config(data: dict):
     """Update in-memory config and recreate device manager."""
-    global config_data, sys_cfg, devices_cfg, device_manager, wind_service
+    global config_data, sys_cfg, devices_cfg, device_manager, wind_service, storage_service
 
     original = copy.deepcopy(data)
     merged = _detect_and_merge_devices(data)
@@ -160,21 +162,31 @@ def apply_config(data: dict):
     _detect_devices_console()
 
     # stop old manager if exists
+    if storage_service:
+        try:
+            storage_service.stop()
+        except Exception:
+            pass
+        storage_service = None
     if device_manager:
         try:
             device_manager.stop_all()
         except Exception:
             pass
+        device_manager = None
     if wind_service:
         try:
             wind_service.stop()
         except Exception:
             pass
 
+    storage_cfg = config_data.get("storage", {})
+
     device_manager = DeviceManager(
         socketio=socketio,
         devices_cfg=devices_cfg,
         sys_cfg=sys_cfg,
+        storage_cfg=storage_cfg,
     )
     wind_service = WindService(socketio=socketio, cfg=wind_cfg)
     try:
@@ -186,6 +198,12 @@ def apply_config(data: dict):
         device_manager.start_all()
     except Exception:
         pass
+    # start storage service after devices are up
+    try:
+        storage_service = StorageService(device_manager, storage_cfg)
+        storage_service.start()
+    except Exception as e:
+        print("[storage] init error:", e)
     # Send a test IoT payload at startup/config reload
     try:
         iot.publish({

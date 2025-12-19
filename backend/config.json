@@ -3,6 +3,13 @@
   "sample_rate": 1600,
   "samples_per_read": 1600,
   "fft_interval": 0.5,
+  "storage": {
+    "enabled": true,
+    "interval_s": 600,
+    "duration_s": 30,
+    "output_dir": "backend/data",
+    "filename_format": "{display_name}_{ts}.tdms"
+  },
   "devices": {
     "cDAQ3": {
       "channels": [
@@ -37,21 +44,21 @@
           "remark": "Y-axis"
         }
       ],
-      "model": "cDAQ3Mod1",
-      "display_name": "cDAQ3"
+      "display_name": "塔110201",
+      "model": "cDAQ3Mod1"
     }
   },
   "iot": {
-    "type": "mqtt",
-    "host": "a3bu3p0y1xuf8q.ats.iot.cn-north-1.amazonaws.com.cn",
-    "port": 8883,
-    "topic": "tower/data",
-    "client_id": "TowerMonitor1",
-    "username": "",
-    "password": "",
     "ca_cert": "backend/license/AmazonRootCA1.pem",
     "certfile": "backend/license/f4f0d80e076beaeb6a907702e5e59fa5a6018f0b359d6c09de81ee14f784f52f-certificate.pem.crt",
-    "keyfile": "backend/license/f4f0d80e076beaeb6a907702e5e59fa5a6018f0b359d6c09de81ee14f784f52f-private.pem.key"
+    "client_id": "TowerMonitor1",
+    "host": "a3bu3p0y1xuf8q.ats.iot.cn-north-1.amazonaws.com.cn",
+    "keyfile": "backend/license/f4f0d80e076beaeb6a907702e5e59fa5a6018f0b359d6c09de81ee14f784f52f-private.pem.key",
+    "password": "",
+    "port": 8883,
+    "topic": "tower/data",
+    "type": "mqtt",
+    "username": ""
   },
   "wind": {
     "enabled": true,

@@ -1,0 +1,6 @@
+2025-12-19 21:54:16,device=cDAQ3,ch=0,max=-0.007012,min=-0.013968,rms=0.010412
+2025-12-19 21:54:16,device=cDAQ3,ch=1,max=0.365512,min=-0.277172,rms=0.103133
+2025-12-19 21:54:16,device=cDAQ3,fatigue_Dmax=0.000000e+00,phi_deg=2.50,Sa_max=0.0098
+2025-12-19 22:04:17,device=cDAQ3,ch=0,max=-0.007200,min=-0.013780,rms=0.010412
+2025-12-19 22:04:17,device=cDAQ3,ch=1,max=0.361754,min=-0.179454,rms=0.102925
+2025-12-19 22:04:17,device=cDAQ3,fatigue_Dmax=0.000000e+00,phi_deg=2.50,Sa_max=0.0120

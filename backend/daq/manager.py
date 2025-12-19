@@ -2,9 +2,11 @@ from .device import DAQDevice
 
 
 class DeviceManager:
-    def __init__(self, socketio, devices_cfg, sys_cfg):
+    def __init__(self, socketio, devices_cfg, sys_cfg, storage_cfg=None):
         self.socketio = socketio
         self.devices = {}
+        storage_cfg = storage_cfg or {}
+        storage_duration = storage_cfg.get("duration_s", 60)
 
         for name, dev_cfg in devices_cfg.items():
             self.devices[name] = DAQDevice(
@@ -14,6 +16,7 @@ class DeviceManager:
                 effective_sample_rate=sys_cfg.get("effective_sample_rate", sys_cfg["sample_rate"]),
                 samples_per_read=sys_cfg["samples_per_read"],
                 fft_interval=sys_cfg["fft_interval"],
+                storage_duration_s=storage_duration,
             )
             self.devices[name].socketio = socketio
 

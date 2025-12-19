@@ -1,0 +1,1155 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>cDAQ Monitoring (MVP)</title>
+
+    <!-- Socket.IO (protocol v4 client) -->
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+
+    <!-- Plotly -->
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <!-- Bootstrap -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+
+    <style>
+        body { background: #f7f9fb; }
+        .tab-panel { display: none; }
+        .tab-panel.active { display: block; }
+        .plot { width: 100%; height: 240px; }
+        .fatigue-params { font-size: 13px; color: #495057; line-height: 1.4; }
+        .spectrum-btns button { margin-right: 6px; }
+        .fatigue-info { font-size: 16px; color: #212529; line-height: 1.7; }
+        .section-border { border: 1px solid #dee2e6; border-radius: 6px; padding: 10px; margin-bottom: 8px; background: #fff; overflow: hidden; }
+        .fatigue-table { font-size: 12px; }
+        .fatigue-table th, .fatigue-table td { padding: 0.25rem 0.4rem; }
+    </style>
+</head>
+
+<body>
+
+<div class="container py-3">
+<h3 class="mb-3">结构健康监测系统</h3>
+
+<div class="mb-3">
+    <div class="btn-group" role="group">
+        <button id="tab-monitor" class="btn btn-outline-primary active" onclick="setActiveTab('monitor')">监测</button>
+        <button id="tab-config" class="btn btn-outline-primary" onclick="setActiveTab('config')">配置</button>
+        <button id="tab-fatigue" class="btn btn-outline-primary" onclick="setActiveTab('fatigue')">疲劳</button>
+    </div>
+</div>
+
+<div id="monitor-panel" class="tab-panel active">
+    <div id="wind-card-holder" class="mb-3"></div>
+    <div id="devices-container" class="row g-3"></div>
+    <div class="card shadow-sm mt-3">
+        <div class="card-body">
+            <div id="spectrum-controls" class="d-flex align-items-center spectrum-btns mb-2">
+                <span class="me-2 text-muted">频谱 X 轴</span>
+                <button class="btn btn-sm btn-outline-secondary" onclick="setSpectrumScale('linear')">Linear</button>
+                <button class="btn btn-sm btn-outline-secondary" onclick="setSpectrumScale('log')">Log</button>
+            </div>
+            <div id="spectrum-container"></div>
+        </div>
+    </div>
+</div>
+
+<div id="config-panel" class="tab-panel">
+    <p class="text-muted">通过表单更新配置（保存后前端自动重载，需要重新点击 Start 生效）</p>
+    <div id="config-form" class="card card-body shadow-sm"></div>
+    <div class="mt-2">
+        <button class="btn btn-outline-secondary me-2" onclick="reloadConfig()">重新加载</button>
+        <button class="btn btn-primary" onclick="saveConfig()">保存配置</button>
+    </div>
+    <div id="save-status" class="mt-2 small text-muted"></div>
+</div>
+
+<div id="fatigue-panel" class="tab-panel">
+    <p class="text-muted">展示最近一次疲劳方向损伤结果（后端每 10 分钟更新一次）</p>
+    <div class="mb-2">
+        <button class="btn btn-sm btn-outline-danger" onclick="resetFatigue()">重置疲劳累计</button>
+        <span id="fatigue-status" class="small text-muted ms-2"></span>
+    </div>
+    <div id="fatigue-cards" class="row g-3"></div>
+</div>
+
+<script>
+/* =====================================================
+   Socket.IO 杩炴帴
+===================================================== */
+const socket = io("http://127.0.0.1:5000");
+let deviceConfigs = {};
+let configData = {};
+let deviceStatus = {};
+const subscribed = new Set();
+let fatigueData = {};
+let spectrumScale = "linear";
+const spectrumCache = {};
+
+function getDeviceLabel(deviceKey) {
+    const cfg = (deviceConfigs || {})[deviceKey] || {};
+    return cfg.display_name || deviceKey;
+}
+
+socket.on("connect", () => {
+    console.log("Socket connected");
+    socket.emit("get_devices");
+    reloadConfig();
+    fetchFatigue();
+    fetchWind();
+});
+
+socket.on("devices", (payload) => {
+    const { devices = {}, status = {} } = payload || {};
+    deviceConfigs = devices;
+    deviceStatus = status;
+    renderDevices();
+    console.log("Device status:", status);
+});
+
+socket.on("wind_sample", (payload) => {
+    updateWindSample(payload);
+});
+
+socket.on("wind_stats", (payload) => {
+    updateWindStats(payload);
+});
+
+/* =====================================================
+   Tabs
+===================================================== */
+function setActiveTab(name) {
+    document.getElementById("monitor-panel").classList.toggle("active", name === "monitor");
+    document.getElementById("config-panel").classList.toggle("active", name === "config");
+    document.getElementById("fatigue-panel").classList.toggle("active", name === "fatigue");
+    document.getElementById("tab-monitor").classList.toggle("active", name === "monitor");
+    document.getElementById("tab-config").classList.toggle("active", name === "config");
+    document.getElementById("tab-fatigue").classList.toggle("active", name === "fatigue");
+    if (name === "monitor") {
+        requestAnimationFrame(resizeAllPlots);
+    } else if (name === "fatigue") {
+        requestAnimationFrame(renderFatigue);
+    }
+}
+
+/* =====================================================
+   Wind (sim / RS485 placeholder)
+===================================================== */
+let windState = { connected: false, mode: "sim", sample: null, stats: null };
+
+async function fetchWind() {
+    try {
+        const res = await fetch("/api/wind");
+        const data = await res.json();
+        windState = {
+            connected: !!data.connected,
+            mode: data.mode || "sim",
+            sample: data.sample || null,
+            stats: data.stats || null,
+        };
+        renderWindCard();
+    } catch (e) {
+        // ignore
+    }
+}
+
+function updateWindSample(payload) {
+    if (!payload) return;
+    windState.connected = !!payload.connected;
+    windState.mode = payload.mode || windState.mode;
+    windState.sample = {
+        ts: payload.ts,
+        speed_mps: payload.speed_mps,
+        direction_deg: payload.direction_deg,
+    };
+    renderWindCard();
+}
+
+function updateWindStats(payload) {
+    if (!payload) return;
+    windState.connected = !!payload.connected;
+    windState.mode = payload.mode || windState.mode;
+    windState.stats = payload.stats || null;
+    renderWindCard();
+}
+
+function renderWindCard() {
+    const holder = document.getElementById("wind-card-holder");
+    if (!holder) return;
+
+    const connected = windState.connected;
+    const mode = windState.mode || "sim";
+    const badgeClass = connected ? "text-bg-success" : "text-bg-secondary";
+    const badgeText = connected ? "已连接" : (mode === "sim" ? "未连接（仿真）" : "未连接");
+
+    const s = windState.sample || {};
+    const st = windState.stats || {};
+    const speed = (s.speed_mps != null) ? Number(s.speed_mps).toFixed(2) : "-";
+    const dir = (s.direction_deg != null) ? Number(s.direction_deg).toFixed(1) : "-";
+    const mean = (st.speed_mean != null) ? Number(st.speed_mean).toFixed(2) : "-";
+    const min = (st.speed_min != null) ? Number(st.speed_min).toFixed(2) : "-";
+    const max = (st.speed_max != null) ? Number(st.speed_max).toFixed(2) : "-";
+    const dmean = (st.direction_mean_deg != null) ? Number(st.direction_mean_deg).toFixed(1) : "-";
+
+    holder.innerHTML = `
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <div class="h5 mb-0">风速 / 风向</div>
+            <span class="badge ${badgeClass}">${badgeText}</span>
+          </div>
+          <div class="row g-2">
+            <div class="col-12 col-md-6">
+              <div class="small text-muted">实时</div>
+              <div><strong>风速</strong>：${speed} m/s</div>
+              <div><strong>风向</strong>：${dir} °</div>
+            </div>
+            <div class="col-12 col-md-6">
+              <div class="small text-muted">10 分钟统计</div>
+              <div><strong>平均风速</strong>：${mean} m/s</div>
+              <div><strong>最小/最大</strong>：${min} / ${max} m/s</div>
+              <div><strong>平均风向</strong>：${dmean} °</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+}
+
+/* =====================================================
+   閰嶇疆鍔犺浇 / 淇濆瓨
+===================================================== */
+async function reloadConfig() {
+    try {
+        const res = await fetch("/api/config");
+        const data = await res.json();
+        configData = data;
+        deviceConfigs = data.devices || {};
+        renderConfigForm();
+        renderDevices();
+        setStatus("已加载配置", false);
+    } catch (err) {
+        setStatus(`加载失败: ${err}`, true);
+    }
+}
+
+async function saveConfig() {
+    try {
+        const parsed = readConfigForm();
+        const res = await fetch("/api/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(parsed)
+        });
+        const out = await res.json();
+        if (!res.ok || out.status === "error") {
+            throw new Error(out.error || "保存失败");
+        }
+        configData = out.config;
+        deviceConfigs = configData.devices || {};
+        renderDevices();
+        setStatus("已保存配置，采集参数已重载，需重新点击 Start", false);
+    } catch (err) {
+        setStatus(`保存失败: ${err.message || err}`, true);
+    }
+}
+
+function setStatus(msg, isError) {
+    const el = document.getElementById("save-status");
+    el.textContent = msg;
+    el.style.color = isError ? "#b00" : "#444";
+}
+
+/* =====================================================
+   Spectrum handling
+===================================================== */
+function renderSpectrum(device, freq = [], spectra = []) {
+    spectrumCache[device] = { freq, spectra };
+    const container = document.getElementById("spectrum-container");
+    let chart = document.getElementById(`spectrum-${device}`);
+    if (!chart) {
+        chart = document.createElement("div");
+        chart.id = `spectrum-${device}`;
+        chart.style.width = "100%";
+        chart.style.height = "280px";
+        chart.style.marginBottom = "16px";
+        container.appendChild(chart);
+    }
+    const traces = (spectra || []).map((mag, idx) => ({
+        x: freq,
+        y: mag,
+        mode: "lines",
+        line: { width: 1 },
+        name: `CH${idx}`
+    }));
+    if (!traces.length) {
+        chart.textContent = "绛夊緟棰戣氨鏁版嵁...";
+        return;
+    }
+    Plotly.newPlot(chart, traces, {
+        margin: { t: 20, b: 40, l: 60, r: 20 },
+        xaxis: { title: "Frequency (Hz)", type: spectrumScale === "log" ? "log" : "linear" },
+        yaxis: { title: "Magnitude (dB)" }
+    }, { displayModeBar: false });
+}
+
+function setSpectrumScale(scale) {
+    spectrumScale = scale === "log" ? "log" : "linear";
+    Object.entries(spectrumCache).forEach(([dev, data]) => {
+        renderSpectrum(dev, data.freq, data.spectra);
+    });
+}
+
+function renderConfigForm() {
+    const container = document.getElementById("config-form");
+    if (!configData || !container) return;
+    container.innerHTML = "";
+
+    const sampleRateOptions = [51200, 25600, 12800, 6400, 3200, 1600, 800, 400, 200, 100];
+    const currentRate = Number(configData.effective_sample_rate || configData.sample_rate || 0);
+    // System parameters
+    const sysBox = document.createElement("div");
+    sysBox.className = "mb-3";
+    sysBox.innerHTML = `
+        <h5>系统参数</h5>
+        <div class="row g-2">
+            <div class="col-12 col-md-4">
+                <label class="form-label">采样率 sample_rate (Hz)</label>
+                <select id="cfg-sample-rate" class="form-select form-select-sm">
+                    ${sampleRateOptions.map(v => `<option value="${v}" ${v === currentRate ? "selected" : ""}>${v}</option>`).join("")}
+                    <option value="${currentRate}" ${sampleRateOptions.includes(currentRate) ? "" : "selected"}>${sampleRateOptions.includes(currentRate) ? "自定义" : currentRate}</option>
+                </select>
+            </div>
+            <div class="col-12 col-md-4">
+                <label class="form-label">每次读取 samples_per_read</label>
+                <input type="number" id="cfg-samples-per-read" class="form-control form-control-sm" value="${configData.samples_per_read || 0}">
+            </div>
+            <div class="col-12 col-md-4">
+                <label class="form-label">FFT 间隔 fft_interval (s)</label>
+                <input type="number" step="0.01" id="cfg-fft-interval" class="form-control form-control-sm" value="${configData.fft_interval || 0}">
+            </div>
+        </div>
+    `;
+    container.appendChild(sysBox);
+
+    // Wind parameters
+    const windCfg = configData.wind || {};
+    const windRs485 = windCfg.rs485 || {};
+    const windBox = document.createElement("div");
+    windBox.className = "mb-3";
+    windBox.innerHTML = `
+        <h5>风速/ 风向</h5>
+        <div class="row g-2">
+            <div class="col-12 col-md-3">
+                <label class="form-label">启用</label>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="cfg-wind-enabled" ${windCfg.enabled !== false ? "checked" : ""}>
+                    <label class="form-check-label" for="cfg-wind-enabled">采集风速风向</label>
+                </div>
+            </div>
+            <div class="col-12 col-md-3">
+                <label class="form-label">模式</label>
+                <select id="cfg-wind-mode" class="form-select form-select-sm">
+                    <option value="sim" ${(String(windCfg.mode || "sim").toLowerCase() === "sim") ? "selected" : ""}>仿真</option>
+                    <option value="rs485" ${(String(windCfg.mode || "sim").toLowerCase() === "rs485") ? "selected" : ""}>RS485</option>
+                </select>
+            </div>
+            <div class="col-12 col-md-3">
+                <label class="form-label">采样间隔 (s)</label>
+                <input type="number" step="0.1" min="0.1" id="cfg-wind-sample-interval" class="form-control form-control-sm" value="${windCfg.sample_interval_s ?? 1.0}">
+            </div>
+            <div class="col-12 col-md-3">
+                <label class="form-label">统计间隔 (s)</label>
+                <input type="number" step="1" min="10" id="cfg-wind-stats-interval" class="form-control form-control-sm" value="${windCfg.stats_interval_s ?? 600.0}">
+            </div>
+        </div>
+
+        <div class="row g-2 mt-1" id="cfg-wind-sim-row">
+            <div class="col-12 col-md-3">
+                <label class="form-label">仿真 Seed</label>
+                <input type="number" step="1" id="cfg-wind-sim-seed" class="form-control form-control-sm" value="${windCfg.sim_seed ?? 1}">
+            </div>
+        </div>
+
+        <div class="row g-2 mt-1" id="cfg-wind-rs485-row">
+            <div class="col-12 col-md-3">
+                <label class="form-label">串口 (COM)</label>
+                <input type="text" id="cfg-wind-port" class="form-control form-control-sm" value="${windRs485.port || "COM3"}">
+            </div>
+            <div class="col-12 col-md-3">
+                <label class="form-label">波特率</label>
+                <input type="number" step="1" id="cfg-wind-baudrate" class="form-control form-control-sm" value="${windRs485.baudrate ?? 9600}">
+            </div>
+            <div class="col-12 col-md-3">
+                <label class="form-label">浠庣珯鍦板潃</label>
+                <input type="number" step="1" min="1" id="cfg-wind-slave-id" class="form-control form-control-sm" value="${windRs485.slave_id ?? 1}">
+            </div>
+            <div class="col-12 col-md-3">
+                <label class="form-label">璇存槑</label>
+                <div class="small text-muted">RS485 璇诲彇閫昏緫寰呮帴鍏ョ‖浠跺悗琛ラ綈</div>
+            </div>
+        </div>
+    `;
+    container.appendChild(windBox);
+
+    function updateWindModeUI() {
+        const mode = (document.getElementById("cfg-wind-mode")?.value || "sim").toLowerCase();
+        const simRow = document.getElementById("cfg-wind-sim-row");
+        const rsRow = document.getElementById("cfg-wind-rs485-row");
+        if (simRow) simRow.style.display = mode === "sim" ? "" : "none";
+        if (rsRow) rsRow.style.display = mode === "rs485" ? "" : "none";
+    }
+    document.getElementById("cfg-wind-mode")?.addEventListener("change", updateWindModeUI);
+    updateWindModeUI();
+
+    // Devices + channels
+    const devBox = document.createElement("div");
+    devBox.innerHTML = "<h5>璁惧涓庨€氶亾</h5>";
+    Object.entries(configData.devices || {}).forEach(([devName, devCfg]) => {
+        const devCard = document.createElement("div");
+        devCard.className = "card card-body shadow-sm mb-2";
+
+        const title = document.createElement("h4");
+        title.className = "h6";
+        title.textContent = `${devName} (${devCfg.model || "unknown"})`;
+        devCard.appendChild(title);
+
+        const devMetaRow = document.createElement("div");
+        devMetaRow.className = "row g-2 align-items-center mb-2";
+        devMetaRow.innerHTML = `
+            <div class="col-12 col-md-6">
+                <label class="form-label mb-1">测点名称（显示用，不影响采集）</label>
+                <input type="text" class="form-control form-control-sm dev-display-name" data-dev="${devName}" value="${devCfg.display_name || devName}">
+            </div>
+        `;
+        devCard.appendChild(devMetaRow);
+
+        const table = document.createElement("table");
+        table.className = "table table-sm align-middle";
+        table.innerHTML = `
+            <thead class="table-light">
+                <tr>
+                    <th>ID</th>
+                    <th>启用</th>
+                    <th>耦合</th>
+                    <th>类型</th>
+                    <th>单位</th>
+                    <th>灵敏度 (mV/g)</th>
+                    <th>IEPE</th>
+                    <th>备注</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        `;
+        const tbody = table.querySelector("tbody");
+
+        const unitOptions = ["g", "Pa", "m/s", "m"];
+
+        (devCfg.channels || []).forEach((ch, idx) => {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+                <td><input type="number" value="${ch.id ?? idx}" data-dev="${devName}" data-idx="${idx}" class="ch-id form-control form-control-sm" readonly></td>
+                <td class="text-center"><input type="checkbox" ${ch.enabled !== false ? "checked" : ""} data-dev="${devName}" data-idx="${idx}" class="ch-enabled form-check-input"></td>
+                <td>
+                    <select data-dev="${devName}" data-idx="${idx}" class="ch-coupling form-select form-select-sm">
+                        <option value="AC" ${((ch.coupling || "AC").toUpperCase() === "AC") ? "selected" : ""}>AC</option>
+                        <option value="DC" ${((ch.coupling || "AC").toUpperCase() === "DC") ? "selected" : ""}>DC</option>
+                    </select>
+                </td>
+                <td><input type="text" value="${ch.type || "acc"}" data-dev="${devName}" data-idx="${idx}" class="ch-type form-control form-control-sm"></td>
+                <td>
+                    <select data-dev="${devName}" data-idx="${idx}" class="ch-unit form-select form-select-sm">
+                        ${unitOptions.map(u => `<option value="${u}" ${ch.unit === u ? "selected" : ""}>${u}</option>`).join("")}
+                    </select>
+                </td>
+                <td><input type="number" step="0.01" value="${ch.sensitivity ?? ""}" data-dev="${devName}" data-idx="${idx}" class="ch-sens form-control form-control-sm" title="鍗曚綅 mV/g"></td>
+                <td class="text-center"><input type="checkbox" ${ch.iepe ? "checked" : ""} data-dev="${devName}" data-idx="${idx}" class="ch-iepe form-check-input"></td>
+                <td><input type="text" value="${ch.remark || ""}" data-dev="${devName}" data-idx="${idx}" class="ch-remark form-control form-control-sm"></td>
+            `;
+            tbody.appendChild(tr);
+        });
+
+        devCard.appendChild(table);
+        devBox.appendChild(devCard);
+    });
+
+    container.appendChild(devBox);
+}
+
+function readConfigForm() {
+    const nextConfig = {
+        // effective sample rate is user's selection; actual hardware rate floors to 1600 if below
+        effective_sample_rate: Number(document.getElementById("cfg-sample-rate")?.value || 0),
+        sample_rate: (() => {
+            const sel = Number(document.getElementById("cfg-sample-rate")?.value || 0);
+            return sel > 0 && sel < 1600 ? 1600 : sel;
+        })(),
+        samples_per_read: Number(document.getElementById("cfg-samples-per-read")?.value || 0),
+        fft_interval: Number(document.getElementById("cfg-fft-interval")?.value || 0),
+        devices: {},
+        iot: configData.iot,
+        wind: (() => {
+            const enabled = document.getElementById("cfg-wind-enabled")?.checked ?? (configData.wind?.enabled !== false);
+            const mode = (document.getElementById("cfg-wind-mode")?.value || (configData.wind?.mode || "sim")).toLowerCase();
+            const sampleInterval = Number(document.getElementById("cfg-wind-sample-interval")?.value || (configData.wind?.sample_interval_s ?? 1.0));
+            const statsInterval = Number(document.getElementById("cfg-wind-stats-interval")?.value || (configData.wind?.stats_interval_s ?? 600.0));
+            const simSeed = Number(document.getElementById("cfg-wind-sim-seed")?.value || (configData.wind?.sim_seed ?? 1));
+            const port = (document.getElementById("cfg-wind-port")?.value || (configData.wind?.rs485?.port || "COM3"));
+            const baudrate = Number(document.getElementById("cfg-wind-baudrate")?.value || (configData.wind?.rs485?.baudrate ?? 9600));
+            const slaveId = Number(document.getElementById("cfg-wind-slave-id")?.value || (configData.wind?.rs485?.slave_id ?? 1));
+            return {
+                ...(configData.wind || {}),
+                enabled,
+                mode,
+                sample_interval_s: sampleInterval,
+                stats_interval_s: statsInterval,
+                sim_seed: simSeed,
+                rs485: {
+                    ...(configData.wind?.rs485 || {}),
+                    port,
+                    baudrate,
+                    slave_id: slaveId,
+                }
+            };
+        })(),
+    };
+
+    Object.entries(configData.devices || {}).forEach(([devName, devCfg]) => {
+        const channels = (devCfg.channels || []).map((ch, idx) => {
+            const idInput = document.querySelector(`.ch-id[data-dev="${devName}"][data-idx="${idx}"]`);
+            const enabledInput = document.querySelector(`.ch-enabled[data-dev="${devName}"][data-idx="${idx}"]`);
+            const sensInput = document.querySelector(`.ch-sens[data-dev="${devName}"][data-idx="${idx}"]`);
+            const iepeInput = document.querySelector(`.ch-iepe[data-dev="${devName}"][data-idx="${idx}"]`);
+            const couplingSelect = document.querySelector(`.ch-coupling[data-dev="${devName}"][data-idx="${idx}"]`);
+            const typeInput = document.querySelector(`.ch-type[data-dev="${devName}"][data-idx="${idx}"]`);
+            const unitSelect = document.querySelector(`.ch-unit[data-dev="${devName}"][data-idx="${idx}"]`);
+            const remarkInput = document.querySelector(`.ch-remark[data-dev="${devName}"][data-idx="${idx}"]`);
+
+            return {
+                id: Number(idInput?.value ?? idx),
+                enabled: enabledInput?.checked ?? true,
+                coupling: couplingSelect?.value ?? "AC",
+                type: typeInput?.value || "acc",
+                unit: unitSelect?.value || ch.unit,
+                sensitivity: Number(sensInput?.value ?? ch.sensitivity ?? 0),
+                iepe: iepeInput?.checked ?? false,
+                remark: remarkInput?.value || "",
+                iepe_current: ch.iepe_current, // keep if present
+            };
+        });
+
+        nextConfig.devices[devName] = {
+            ...devCfg,
+            model: devCfg.model,
+            display_name: (document.querySelector(`.dev-display-name[data-dev="${devName}"]`)?.value || devCfg.display_name || devName),
+            channels,
+        };
+    });
+
+    return nextConfig;
+}
+
+/* =====================================================
+   鐤插姵鏁版嵁
+===================================================== */
+async function fetchFatigue() {
+    try {
+        const res = await fetch("/api/fatigue");
+        fatigueData = await res.json();
+        if (document.getElementById("tab-fatigue").classList.contains("active")) {
+            renderFatigue();
+        }
+    } catch (err) {
+        console.warn("fatigue fetch failed", err);
+    }
+    setTimeout(fetchFatigue, 30000);
+}
+
+async function resetFatigue() {
+    try {
+        const userInput = prompt("输入“确认”后重置疲劳累计？");
+        if (userInput !== "确认") {
+            document.getElementById("fatigue-status").textContent = "已取消重置（需输入“确认”）";
+            return;
+        }
+        const res = await fetch("/api/fatigue/reset", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({})
+        });
+        const data = await res.json();
+        if (!res.ok || data.status !== "ok") {
+            throw new Error(data.error || "重置失败");
+        }
+        document.getElementById("fatigue-status").textContent = "已重置疲劳累计";
+        await fetchFatigue();
+    } catch (err) {
+        document.getElementById("fatigue-status").textContent = `重置失败: ${err.message || err}`;
+    }
+}
+
+function renderFatigue() {
+    const container = document.getElementById("fatigue-cards");
+    container.innerHTML = "";
+
+    const names = Object.keys(fatigueData);
+    if (!names.length) {
+        container.textContent = "尚无疲劳结果（等待后端生成）";
+        return;
+    }
+
+    names.forEach(name => {
+        const item = fatigueData[name];
+        const cardCol = document.createElement("div");
+        cardCol.className = "col-12";
+        const card = document.createElement("div");
+        card.className = "card card-body shadow-sm";
+
+        const title = document.createElement("h3");
+        title.textContent = `${name} 鐤插姵缁撴灉`;
+        card.appendChild(title);
+
+        const info = document.createElement("div");
+        info.className = "fatigue-params fatigue-info";
+        const dmaxTxt = item.D_cum_max ?? item.Dmax;
+        const phiTxt = item.phi_deg_cum ?? item.phi_deg;
+        info.innerHTML = [
+            `鏃堕棿: ${item.timestamp || "-"}`,
+            `Dmax(绱): ${dmaxTxt?.toExponential ? dmaxTxt.toExponential(3) : dmaxTxt}`,
+            `鏂瑰悜: ${phiTxt?.toFixed ? phiTxt.toFixed(2) : phiTxt}掳`,
+            `鏈€澶у簲鍔涘箙(鏈獥鍙?: ${item.Sa_max?.toFixed ? item.Sa_max.toFixed(3) : item.Sa_max} MPa`
+        ].join(" | ");
+        const params = item.params || {};
+        const paramBox = document.createElement("div");
+        paramBox.className = "fatigue-params fatigue-info";
+        paramBox.innerHTML = [
+            `閲囨牱棰戠巼 fs = ${params.fs || "-"}`,
+            `浣嶇Щ-搴斿姏绯绘暟 k_disp2stress = ${params.k_disp2stress || "-"} MPa/m`,
+            `寮规€фā閲?E = ${params.et || "-"} MPa`,
+            `鏂瑰悜鍒嗚鲸鐜?dphi = ${params.dphi_deg || "-"} 掳`
+        ].join("<br>");
+
+        const topRow = document.createElement("div");
+        topRow.className = "row g-2";
+
+        const infoCol = document.createElement("div");
+        infoCol.className = "col-12 col-md-6";
+        const infoBox = document.createElement("div");
+        infoBox.className = "section-border";
+        infoBox.appendChild(info);
+        infoBox.appendChild(paramBox);
+        infoCol.appendChild(infoBox);
+
+        const snCol = document.createElement("div");
+        snCol.className = "col-12 col-md-6";
+        const snTitle = document.createElement("h6");
+        snTitle.textContent = "S-N 鏇茬嚎";
+        snCol.appendChild(snTitle);
+        const snDiv = document.createElement("div");
+        snDiv.id = `fatigue-sn-${name}`;
+        snDiv.style.width = "100%";
+        snDiv.style.height = "280px";
+        snDiv.style.marginTop = "8px";
+        snCol.appendChild(snDiv);
+
+        topRow.appendChild(infoCol);
+        topRow.appendChild(snCol);
+        card.appendChild(topRow);
+
+        const polarDiv = document.createElement("div");
+        polarDiv.id = `fatigue-polar-${name}`;
+        polarDiv.style.width = "100%";
+        polarDiv.style.height = "380px";
+        card.appendChild(polarDiv);
+
+        const phiList = item.phi_deg_list || [];
+        const dList = item.D_phi_cum || item.D_phi || [];
+        if (phiList.length && dList.length) {
+            const pairs = phiList
+                .map((phi, i) => [Number(phi), Number(dList[i])])
+                .filter(p => Number.isFinite(p[0]) && Number.isFinite(p[1]));
+            pairs.sort((a, b) => a[0] - b[0]);
+            const closedPhi = pairs.map(p => p[0]);
+            const closedD = pairs.map(p => p[1]);
+            if (closedPhi.length) {
+                closedPhi.push(closedPhi[0]);
+                closedD.push(closedD[0]);
+            }
+            // If most bins are zero, the curve collapses to the origin and looks like 鈥渟pokes鈥?
+            // For visualization only: raise the floor slightly so the curve becomes a ring.
+            const maxD = closedD.length ? Math.max(...closedD) : 0;
+            const floor = maxD > 0 ? maxD * 0.005 : 0;
+            const dPlot = floor > 0 ? closedD.map(v => (v > 0 ? v : floor)) : closedD;
+            Plotly.newPlot(polarDiv, [{
+                type: "scatterpolar",
+                r: dPlot,
+                theta: closedPhi,
+                mode: "lines+markers",
+                fill: "toself",
+                fillcolor: "rgba(0,187,119,0.10)",
+                line: { color: "#0b7", width: 2 },
+                marker: { size: 4 }
+            }, {
+                type: "scatterpolar",
+                r: [(item.D_cum_max || item.Dmax || 0)],
+                theta: [item.phi_deg_cum || item.phi_deg || 0],
+                mode: "markers",
+                marker: { color: "red", size: 8 },
+                name: "Dmax"
+            }], {
+                polar: {
+                    radialaxis: { title: "鐤插姵鎹熶激 D", showline: true, linewidth: 1 },
+                    angularaxis: { direction: "counterclockwise", rotation: 0 }
+                },
+                margin: { t: 20, b: 20, l: 20, r: 20 }
+            }, { displayModeBar: false });
+        } else {
+            polarDiv.textContent = "绛夊緟鏁版嵁...";
+        }
+
+        const sn = item.sn_curve || {};
+        const saList = sn.Sa || [];
+        const nList = sn.N || [];
+        const snDivEl = document.getElementById(`fatigue-sn-${name}`);
+        if (snDivEl) {
+            if (saList.length && nList.length) {
+                const nPositive = nList.filter(v => v > 0);
+                const nMin = Math.min(...nPositive);
+                const nMax = Math.max(...nPositive);
+                const saMin = Math.min(...saList);
+                const saMax = Math.max(...saList);
+                Plotly.newPlot(snDivEl, [{
+                    x: nList,
+                    y: saList,
+                    mode: "lines",
+                    line: { color: "#07c", width: 2 },
+                }], {
+                    xaxis: {
+                        title: "鐤插姵瀵垮懡 N",
+                        type: "log",
+                        range: [Math.log10(nMin), Math.log10(nMax)]
+                    },
+                    yaxis: {
+                        title: "搴斿姏骞?Sa (MPa)",
+                        range: [saMin, saMax]
+                    },
+                    margin: { t: 20, b: 40, l: 60, r: 20 }
+                }, { displayModeBar: false });
+            } else {
+                snDivEl.textContent = "绛夊緟 S-N 鏁版嵁...";
+            }
+        }
+
+        const dataList = document.createElement("div");
+        dataList.className = "fatigue-params section-border";
+        const listItems = [
+            `Dmax(绱): ${dmaxTxt?.toExponential ? dmaxTxt.toExponential(3) : dmaxTxt}`,
+            `鏂瑰悜: ${phiTxt?.toFixed ? phiTxt.toFixed(2) : phiTxt}掳`,
+            `鏈€澶у簲鍔涘箙(鏈獥鍙?: ${item.Sa_max?.toFixed ? item.Sa_max.toFixed(3) : item.Sa_max} MPa`
+        ];
+        dataList.innerHTML = `<strong>鏁版嵁鍒楄〃</strong><br>${listItems.join("<br>")}`;
+        card.appendChild(dataList);
+
+        cardCol.appendChild(card);
+        container.appendChild(cardCol);
+    });
+}
+
+// ---------- Override with improved layout ----------
+function formatNum(val, digits = 2) {
+    if (val === undefined || val === null || Number.isNaN(val)) return "-";
+    const num = Number(val);
+    return Number.isFinite(num) ? num.toFixed(digits) : "-";
+}
+
+function formatExp(val, digits = 3) {
+    if (val === undefined || val === null || Number.isNaN(val)) return "-";
+    const num = Number(val);
+    if (!Number.isFinite(num)) return "-";
+    return num === 0 ? "0" : num.toExponential(digits);
+}
+
+function renderFatigue() {
+    const container = document.getElementById("fatigue-cards");
+    container.innerHTML = "";
+
+    const names = Object.keys(fatigueData);
+    if (!names.length) {
+        container.textContent = "尚无疲劳结果（等待后端生成）";
+        return;
+    }
+
+    names.forEach(name => {
+        const item = fatigueData[name] || {};
+        const cardCol = document.createElement("div");
+        cardCol.className = "col-12";
+        const card = document.createElement("div");
+        card.className = "card card-body shadow-sm";
+
+        const title = document.createElement("h4");
+        title.className = "mb-3";
+        title.textContent = `${getDeviceLabel(name)} 鐤插姵缁撴灉`;
+        card.appendChild(title);
+
+        const dmaxTxt = item.D_cum_max ?? item.Dmax;
+        const phiTxt = item.phi_deg_cum ?? item.phi_deg;
+
+        const infoBox = document.createElement("div");
+        infoBox.className = "section-border fatigue-info mb-2";
+        infoBox.innerHTML = `
+            <div><strong>时间</strong>：${item.timestamp || "-"}</div>
+            <div><strong>最大损伤</strong>：${formatExp(dmaxTxt)}</div>
+            <div><strong>方向</strong>：${formatNum(phiTxt)} °</div>
+            <div><strong>最大应力幅</strong>：${formatNum(item.Sa_max, 3)} MPa</div>
+        `;
+
+        const params = item.params || {};
+        const paramBox = document.createElement("div");
+        paramBox.className = "section-border fatigue-info mb-2";
+        paramBox.innerHTML = `
+            <div><strong>采样频率 fs</strong>：${params.fs || "-"} Hz</div>
+            <div><strong>位移-应力系数</strong>：${params.k_disp2stress || "-"} MPa/m</div>
+            <div><strong>弹性模量 E</strong>：${params.et || "-"} MPa</div>
+            <div><strong>方向分辨率</strong>：${params.dphi_deg || "-"} °</div>
+        `;
+
+        const topRow = document.createElement("div");
+        topRow.className = "row g-3 align-items-stretch";
+
+        const infoCol = document.createElement("div");
+        infoCol.className = "col-12 col-lg-6";
+        infoCol.appendChild(infoBox);
+        infoCol.appendChild(paramBox);
+
+        const snCol = document.createElement("div");
+        snCol.className = "col-12 col-lg-6";
+        const snCard = document.createElement("div");
+        snCard.className = "section-border h-100";
+        const snTitle = document.createElement("h6");
+        snTitle.textContent = "S-N 鏇茬嚎";
+        const snDiv = document.createElement("div");
+        snDiv.id = `fatigue-sn-${name}`;
+        snDiv.style.width = "100%";
+        snDiv.style.height = "320px";
+        snCard.appendChild(snTitle);
+        snCard.appendChild(snDiv);
+        snCol.appendChild(snCard);
+
+        topRow.appendChild(infoCol);
+        topRow.appendChild(snCol);
+        card.appendChild(topRow);
+
+        const bottomRow = document.createElement("div");
+        bottomRow.className = "row g-3 mt-2";
+
+        const polarCol = document.createElement("div");
+        polarCol.className = "col-12 col-lg-6";
+        const polarCard = document.createElement("div");
+        polarCard.className = "section-border h-100";
+        const polarDiv = document.createElement("div");
+        polarDiv.id = `fatigue-polar-${name}`;
+        polarDiv.style.width = "100%";
+        polarDiv.style.height = "420px";
+        polarCard.appendChild(polarDiv);
+        polarCol.appendChild(polarCard);
+        bottomRow.appendChild(polarCol);
+
+        const tableCol = document.createElement("div");
+        tableCol.className = "col-12 col-lg-6";
+        const tableCard = document.createElement("div");
+        tableCard.className = "section-border h-100";
+        const tableTitle = document.createElement("h6");
+
+        tableTitle.textContent = "方向损伤表";
+        tableWrap.style.maxHeight = "420px";
+        tableWrap.style.overflowY = "auto";
+        const table = document.createElement("table");
+        table.className = "table table-sm mb-0 fatigue-table";
+        const phiList = item.phi_deg_list || [];
+        const dList = item.D_phi_cum || item.D_phi || [];
+        const rows = phiList.map((phi, idx) => {
+            const dVal = dList[idx];
+            return `<tr><td>${formatNum(phi)}掳</td><td>${formatExp(dVal)}</td></tr>`;
+        }).join("");
+        table.innerHTML = `
+            <thead class="table-light"><tr><th style="width: 40%">瑙掑害(掳)</th><th style="width: 60%">绱鍥犲瓙 D</th></tr></thead>
+            <tbody>${rows || '<tr><td colspan="2">绛夊緟鏁版嵁...</td></tr>'}</tbody>
+        `;
+        tableWrap.appendChild(table);
+        tableCard.appendChild(tableTitle);
+        tableCard.appendChild(tableWrap);
+        tableCol.appendChild(tableCard);
+        bottomRow.appendChild(tableCol);
+
+        card.appendChild(bottomRow);
+
+        if (phiList.length && dList.length) {
+            const closedPhi = [...phiList, phiList[0]];
+            const closedD = [...dList, dList[0]];
+            Plotly.newPlot(polarDiv, [{
+                type: "scatterpolar",
+                r: closedD,
+                theta: closedPhi,
+                mode: "lines+markers",
+                line: { color: "#0b7", width: 2 },
+                marker: { size: 4 }
+            }, {
+                type: "scatterpolar",
+                r: [(item.D_cum_max || item.Dmax || 0)],
+                theta: [item.phi_deg_cum || item.phi_deg || 0],
+                mode: "markers",
+                marker: { color: "red", size: 9 },
+                name: "Dmax"
+            }], {
+                title: { text: "鍚勬柟鍚戠殑鐤插姵绱鍥犲瓙", x: 0.5 },
+                polar: {
+                    radialaxis: { title: "绱鍥犲瓙 D", showline: true, linewidth: 1 },
+                    angularaxis: { direction: "counterclockwise", rotation: 0 }
+                },
+                height: 420,
+                margin: { t: 40, b: 20, l: 20, r: 20 }
+            }, { displayModeBar: false, responsive: true });
+        } else {
+            polarDiv.textContent = "绛夊緟鏁版嵁...";
+        }
+
+        const sn = item.sn_curve || {};
+        const saList = sn.Sa || [];
+        const nList = sn.N || [];
+        if (saList.length && nList.length) {
+            const nPositive = nList.filter(v => v > 0);
+            const nMin = Math.min(...nPositive);
+            const nMax = Math.max(...nPositive);
+            const saMin = Math.min(...saList);
+            const saMax = Math.max(...saList);
+            Plotly.newPlot(snDiv, [{
+                x: nList,
+                y: saList,
+                mode: "lines",
+                line: { color: "#07c", width: 2 },
+                name: "S-N"
+            }], {
+                title: { text: "S-N 鏇茬嚎", x: 0.5 },
+                xaxis: {
+                    title: "鐤插姵瀵垮懡 N",
+                    type: "log",
+                    range: [Math.log10(nMin), Math.log10(nMax)]
+                },
+                yaxis: {
+                    title: "搴斿姏骞?Sa (MPa)",
+                    range: [saMin, saMax]
+                },
+                height: 280,
+                margin: { t: 40, b: 40, l: 60, r: 20 }
+            }, { displayModeBar: false, responsive: true });
+        } else {
+            snDiv.textContent = "绛夊緟 S-N 鏁版嵁...";
+        }
+
+        cardCol.appendChild(card);
+        container.appendChild(cardCol);
+    });
+}
+/* =====================================================
+   Plotly 鍒濆鍖?===================================================== */
+function initPlot(divId) {
+    Plotly.newPlot(divId, [{
+        x: [],
+        y: [],
+        mode: "lines",
+        line: { width: 1 }
+    }], {
+        margin: { t: 20 },
+        xaxis: { title: "时间", type: "date" },
+        yaxis: { title: "幅值" }
+    }, { displayModeBar: false });
+}
+
+/* =====================================================
+   鎺у埗鎸囦护
+===================================================== */
+function startDevice(name) {
+    socket.emit("start_device", { device: name });
+}
+
+function stopDevice(name) {
+    socket.emit("stop_device", { device: name });
+}
+
+/* =====================================================
+   鏁版嵁鏇存柊
+===================================================== */
+function getEnabledChannels(deviceName) {
+    const cfg = deviceConfigs[deviceName] || {};
+    return (cfg.channels || []).map((ch, idx) => ({ ch, idx })).filter(({ ch }) => ch.enabled !== false);
+}
+
+function buildTimeAxis(payload, count, fsFallback) {
+    const rate = Number(payload?.sample_rate ?? fsFallback ?? 0);
+    if (!Number.isFinite(rate) || rate <= 0 || !count) return [];
+
+    const endSec = Number(payload?.ts_end ?? payload?.ts_start ?? Date.now() / 1000);
+    const startSec = Number.isFinite(Number(payload?.ts_start))
+        ? Number(payload.ts_start)
+        : endSec - (count - 1) / rate;
+    const startMs = startSec * 1000;
+    const stepMs = 1000 / rate;
+    return Array.from({ length: count }, (_, i) => new Date(startMs + i * stepMs));
+}
+
+function updatePlotsFromPayload(payload) {
+    const { device, time_data: timeData = [], displacement: dispData = [] } = payload;
+    const enabled = getEnabledChannels(device);
+    const fs = deviceStatus[device]?.actual_rate || configData.effective_sample_rate || configData.sample_rate || 1;
+
+    enabled.forEach(({ ch, idx }) => {
+        const samples = timeData[idx];
+        if (!samples || !samples.length) return;
+        const divId = `plot-${device}-${ch.id ?? idx}`;
+        const x = buildTimeAxis(payload, samples.length, fs);
+        if (!x.length) return;
+        Plotly.update(divId, { x: [x], y: [samples] }, {
+            xaxis: { title: "时间", type: "date" },
+            yaxis: { title: `幅值 (${ch.unit || ""})` }
+        });
+
+        // displacement plot
+        const disp = dispData[idx];
+        if (disp && disp.length) {
+            const dispDivId = `disp-${device}-${ch.id ?? idx}`;
+            Plotly.newPlot(dispDivId, [{
+                x,
+                y: disp,
+                mode: "lines",
+                line: { width: 1, color: "#6c5ce7" }
+            }], {
+                margin: { t: 20 },
+                xaxis: { title: "时间", type: "date" },
+                yaxis: { title: "位移 (m，相对)" }
+            }, { displayModeBar: false });
+        }
+    });
+}
+function ensureStreamListener(deviceName) {
+    if (subscribed.has(deviceName)) return;
+    socket.on(`stream_${deviceName}`, updatePlotsFromPayload);
+    socket.on(`spectrum_${deviceName}`, payload => {
+        renderSpectrum(payload.device, payload.freq, payload.spectra);
+    });
+    subscribed.add(deviceName);
+}
+
+/* =====================================================
+   Plot resize
+===================================================== */
+function resizeAllPlots() {
+    document.querySelectorAll(".plot").forEach(div => {
+        Plotly.Plots.resize(div);
+    });
+}
+
+let resizeTimer;
+window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(resizeAllPlots, 150);
+});
+
+/* =====================================================
+   鍔ㄦ€佹覆鏌撹澶?閫氶亾
+===================================================== */
+function renderDevices() {
+    const container = document.getElementById("devices-container");
+    container.innerHTML = "";
+    document.getElementById("spectrum-container").innerHTML = "";
+
+    Object.entries(deviceConfigs).forEach(([name, cfg]) => {
+        ensureStreamListener(name);
+
+        const enabledChannels = (cfg.channels || []).filter(ch => ch.enabled !== false);
+        if (!enabledChannels.length) return;
+
+        const col = document.createElement("div");
+        col.className = "col-12";
+
+        const card = document.createElement("div");
+        card.className = "card card-body shadow-sm";
+
+        const title = document.createElement("h3");
+        title.textContent = `${getDeviceLabel(name)} (${cfg.model || "unknown"})`;
+        card.appendChild(title);
+
+        const stat = deviceStatus[name] || {};
+        const rateSet = (configData.effective_sample_rate || configData.sample_rate || "-");
+        const rateActual = stat.actual_rate != null ? stat.actual_rate : "-";
+        const runningLabel = stat.running ? "运行中" : "已停止";
+        const rateInfo = document.createElement("div");
+        rateInfo.style.fontSize = "12px";
+        rateInfo.style.color = "#444";
+        rateInfo.textContent = `状态 ${runningLabel} | 设定采样率 ${rateSet} Hz | 实际采样率 ${rateActual} Hz`;
+        card.appendChild(rateInfo);
+
+        const controls = document.createElement("div");
+        const startBtn = document.createElement("button");
+        startBtn.textContent = `Start ${getDeviceLabel(name)}`;
+        startBtn.onclick = () => startDevice(name);
+
+        const stopBtn = document.createElement("button");
+        stopBtn.textContent = `Stop ${getDeviceLabel(name)}`;
+        stopBtn.onclick = () => stopDevice(name);
+
+        controls.appendChild(startBtn);
+        controls.appendChild(stopBtn);
+        card.appendChild(controls);
+
+        enabledChannels.forEach((ch, idx) => {
+            const chWrapper = document.createElement("div");
+            chWrapper.className = "channel mb-3";
+
+        const label = document.createElement("b");
+        label.textContent = `CH${ch.id ?? idx}`;
+
+        const meta = document.createElement("div");
+        meta.style.fontSize = "12px";
+        meta.style.color = "#444";
+        meta.textContent = [
+            `类型: ${ch.type || "未知"}`,
+            `单位: ${ch.unit || "-"}`,
+            `灵敏度 ${ch.sensitivity ?? "-"}${ch.unit ? " " + ch.unit : ""}`,
+            `激活 ${ch.enabled !== false ? "是" : "否"}`,
+            `IEPE: ${ch.iepe ? "开" : "关"}`,
+            `耦合: ${(ch.coupling || "AC").toUpperCase()}`,
+            `备注: ${ch.remark || ""}`
+        ].join(" | ");
+
+
+
+
+            const plotDiv = document.createElement("div");
+            plotDiv.id = `plot-${name}-${ch.id ?? idx}`;
+            plotDiv.className = "plot card shadow-sm mb-2";
+
+            const dispDiv = document.createElement("div");
+            dispDiv.id = `disp-${name}-${ch.id ?? idx}`;
+            dispDiv.className = "plot card shadow-sm";
+
+        chWrapper.appendChild(label);
+        chWrapper.appendChild(meta);
+        chWrapper.appendChild(plotDiv);
+            chWrapper.appendChild(dispDiv);
+            card.appendChild(chWrapper);
+        });
+
+        container.appendChild(card);
+        col.appendChild(card);
+        container.appendChild(col);
+
+        // Initialize plots after elements are in the DOM
+        enabledChannels.forEach((ch, idx) => {
+            initPlot(`plot-${name}-${ch.id ?? idx}`);
+        });
+    });
+    resizeAllPlots();
+}
+</script>
+</body>
+</html>

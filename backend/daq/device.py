@@ -20,9 +20,11 @@ class DAQDevice:
         effective_sample_rate: int,
         samples_per_read: int,
         fft_interval: float,
+        storage_duration_s: float = 60.0,
     ):
         self.name = name
         self.model = device_cfg.get("model", "9230")
+        self.display_name = device_cfg.get("display_name", name)
         self.channels = device_cfg["channels"]
 
         self.sample_rate = sample_rate
@@ -35,6 +37,12 @@ class DAQDevice:
         # ring buffers for frontend streaming
         self.buffers = [
             deque(maxlen=sample_rate * 5)
+            for _ in self.channels
+        ]
+        # ring buffers for storage snapshots (raw, non-decimated)
+        self.storage_duration_s = max(1.0, float(storage_duration_s))
+        self.storage_buffers = [
+            deque(maxlen=int(self.sample_rate * self.storage_duration_s))
             for _ in self.channels
         ]
         self.last_fft_time = 0.0
@@ -103,6 +111,9 @@ class DAQDevice:
         # update buffers for streaming using decimated data
         for i, ch_data in enumerate(decimated):
             self.buffers[i].extend(ch_data)
+        # update storage buffers using raw data
+        for i, ch_data in enumerate(data):
+            self.storage_buffers[i].extend(ch_data)
 
         payload = self._build_payload()
         if self.socketio:
@@ -137,6 +148,7 @@ class DAQDevice:
 
         payload = {
             "device": self.name,
+            "display_name": self.display_name,
             "time_data": time_data,
         }
         # displacement (simple double integration) for first two channels
@@ -262,3 +274,27 @@ class DAQDevice:
         self.damage_logger.reset_cumulative()
         self.analysis_worker.last_fatigue = None
         return self.get_fatigue_snapshot()
+
+    # ==========================================================
+    # Storage snapshot helper
+    # ==========================================================
+    def capture_snapshot(self, duration_s: float | None = None):
+        """
+        Return last duration_s seconds of raw data for each channel.
+        """
+        if duration_s is None or duration_s <= 0:
+            duration_s = self.storage_duration_s
+        count = int(duration_s * self.sample_rate)
+        data = []
+        for buf in self.storage_buffers:
+            arr = list(buf)
+            if count and len(arr) > count:
+                arr = arr[-count:]
+            data.append(arr)
+        return {
+            "device": self.name,
+            "display_name": self.display_name,
+            "sample_rate": self.sample_rate,
+            "channels": self.channels,
+            "data": data,
+        }
