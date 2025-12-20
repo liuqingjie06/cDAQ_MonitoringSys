@@ -136,7 +136,7 @@ def api_system_status():
 def api_system_data():
     """List files under data directory (recursive by path argument)."""
     root = _get_data_root()
-    rel_path = request.args.get("path") or ""
+    rel_path = (request.args.get("path") or "").replace("\\", "/")
     target = (root / rel_path).resolve()
 
     # prevent escaping root
@@ -158,14 +158,14 @@ def api_system_data():
                     "is_dir": p.is_dir(),
                     "size": st.st_size if p.is_file() else None,
                     "mtime": st.st_mtime,
-                    "path": str(p.relative_to(root)),
+                    "path": p.relative_to(root).as_posix(),
                 })
             except Exception:
                 entries.append({
                     "name": p.name,
                     "is_dir": p.is_dir(),
                     "error": "stat failed",
-                    "path": str(p.relative_to(root)),
+                    "path": p.relative_to(root).as_posix(),
                 })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -175,7 +175,7 @@ def api_system_data():
     while True:
         try:
             rel = curr.relative_to(root)
-            breadcrumbs.append({"name": curr.name or str(rel), "path": str(rel)})
+            breadcrumbs.append({"name": curr.name or rel.as_posix(), "path": rel.as_posix()})
         except Exception:
             breadcrumbs.append({"name": root.name, "path": ""})
             break
@@ -186,7 +186,7 @@ def api_system_data():
 
     return jsonify({
         "root": str(root),
-        "path": str(target.relative_to(root)),
+        "path": target.relative_to(root).as_posix(),
         "entries": entries,
         "breadcrumbs": breadcrumbs,
     })

@@ -69,7 +69,7 @@
     "duration_s": 20,
     "enabled": true,
     "filename_format": "{display_name}_{ts}.tdms",
-    "interval_s": 60,
+    "interval_s": 600,
     "output_dir": "data"
   }
 }

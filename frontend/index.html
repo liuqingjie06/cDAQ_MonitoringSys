@@ -183,7 +183,7 @@ function renderDataList(data) {
     const list = document.getElementById("data-list");
     const crumbsEl = document.getElementById("data-breadcrumbs");
     const pathEl = document.getElementById("data-path");
-    if (pathEl) pathEl.textContent = data.root || "";
+    if (pathEl) pathEl.textContent = `${data.root || ""}${data.path ? "/" + data.path : ""}`;
     if (crumbsEl) {
         const crumbs = (data.breadcrumbs || []).map(c => {
             return `<a href="#" onclick="openDataPath('${c.path || ""}');return false;">${c.name || "/"}</a>`;
