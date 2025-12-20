@@ -33,9 +33,10 @@
 
 <div class="mb-3">
     <div class="btn-group" role="group">
-        <button id="tab-monitor" class="btn btn-outline-primary active" onclick="setActiveTab('monitor')">监测</button>
-        <button id="tab-config" class="btn btn-outline-primary" onclick="setActiveTab('config')">配置</button>
-        <button id="tab-fatigue" class="btn btn-outline-primary" onclick="setActiveTab('fatigue')">疲劳</button>
+        <button id="tab-monitor" class="btn btn-outline-primary active" onclick="setActiveTab('monitor')">实时监测</button>
+        <button id="tab-config" class="btn btn-outline-primary" onclick="setActiveTab('config')">系统配置</button>
+        <button id="tab-fatigue" class="btn btn-outline-primary" onclick="setActiveTab('fatigue')">疲劳评估</button>
+        <button id="tab-status" class="btn btn-outline-primary" onclick="setActiveTab('status')">设备状态</button>
     </div>
 </div>
 
@@ -73,6 +74,27 @@
     <div id="fatigue-cards" class="row g-3"></div>
 </div>
 
+<div id="status-panel" class="tab-panel">
+    <div class="row g-3">
+        <div class="col-12 col-lg-4">
+            <div class="card card-body shadow-sm h-100">
+                <h5 class="mb-3">主机状态</h5>
+                <div id="sys-status" class="small text-muted">加载中...</div>
+            </div>
+        </div>
+        <div class="col-12 col-lg-8">
+            <div class="card card-body shadow-sm h-100">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h5 class="mb-0">数据目录</h5>
+                    <div id="data-path" class="small text-muted"></div>
+                </div>
+                <div id="data-breadcrumbs" class="mb-2 small"></div>
+                <div id="data-list" style="max-height: 320px; overflow-y: auto;"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
 /* =====================================================
    Socket.IO 连接
@@ -86,10 +108,113 @@ const subscribed = new Set();
 let fatigueData = {};
 let spectrumScale = "linear";
 const spectrumCache = {};
+let systemStatus = {};
+let currentDataPath = "";
 
 function getDeviceLabel(deviceKey) {
     const cfg = (deviceConfigs || {})[deviceKey] || {};
     return cfg.display_name || deviceKey;
+}
+
+/* =====================================================
+   System status + data browser
+===================================================== */
+function formatBytes(bytes) {
+    if (bytes === null || bytes === undefined) return "-";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let v = Number(bytes);
+    let i = 0;
+    while (v >= 1024 && i < units.length - 1) {
+        v /= 1024;
+        i += 1;
+    }
+    return `${v.toFixed(1)} ${units[i]}`;
+}
+
+function formatTime(ts) {
+    if (!ts && ts !== 0) return "-";
+    try {
+        return new Date(ts * 1000).toLocaleString();
+    } catch (e) {
+        return "-";
+    }
+}
+
+async function fetchSystemStatus() {
+    try {
+        const res = await fetch("/api/system/status");
+        systemStatus = await res.json();
+        renderSystemStatus();
+    } catch (e) {
+        const el = document.getElementById("sys-status");
+        if (el) el.textContent = "加载失败";
+    }
+}
+
+function renderSystemStatus() {
+    const el = document.getElementById("sys-status");
+    if (!el) return;
+    const cpu = systemStatus.cpu_percent;
+    const disk = systemStatus.disk || {};
+    const cpuStr = cpu != null ? `${cpu.toFixed ? cpu.toFixed(1) : cpu}%` : "-";
+    const diskStr = (disk.total != null)
+        ? `${formatBytes(disk.used)}/${formatBytes(disk.total)} (剩余 ${formatBytes(disk.free)})`
+        : "-";
+    el.innerHTML = `
+        <div>CPU: ${cpuStr}</div>
+        <div>磁盘: ${diskStr}</div>
+        <div>数据目录: ${systemStatus.data_dir || "-"}</div>
+    `;
+}
+
+async function fetchDataList(path = "") {
+    try {
+        const res = await fetch(`/api/system/data?path=${encodeURIComponent(path)}`);
+        const data = await res.json();
+        currentDataPath = data.path || "";
+        renderDataList(data);
+    } catch (e) {
+        const list = document.getElementById("data-list");
+        if (list) list.textContent = "加载失败";
+    }
+}
+
+function renderDataList(data) {
+    const list = document.getElementById("data-list");
+    const crumbsEl = document.getElementById("data-breadcrumbs");
+    const pathEl = document.getElementById("data-path");
+    if (pathEl) pathEl.textContent = data.root || "";
+    if (crumbsEl) {
+        const crumbs = (data.breadcrumbs || []).map(c => {
+            return `<a href="#" onclick="openDataPath('${c.path || ""}');return false;">${c.name || "/"}</a>`;
+        }).join(" / ");
+        crumbsEl.innerHTML = crumbs || "/";
+    }
+    if (!list) return;
+    const entries = data.entries || [];
+    if (!entries.length) {
+        list.textContent = "空目录";
+        return;
+    }
+    const rows = entries.map(e => {
+        const nameLink = e.is_dir
+            ? `<a href="#" onclick="openDataPath('${e.path}');return false;">📁 ${e.name}</a>`
+            : `<span>📄 ${e.name}</span>`;
+        const size = e.is_dir ? "" : formatBytes(e.size);
+        const mtime = formatTime(e.mtime);
+        return `<tr><td>${nameLink}</td><td>${size}</td><td>${mtime}</td></tr>`;
+    }).join("");
+    list.innerHTML = `
+        <table class="table table-sm mb-0">
+            <thead class="table-light"><tr><th>名称</th><th style="width: 120px;">大小</th><th style="width: 170px;">修改时间</th></tr></thead>
+            <tbody>${rows}</tbody>
+        </table>
+    `;
+}
+
+function openDataPath(path) {
+    currentDataPath = path || "";
+    fetchDataList(currentDataPath);
 }
 
 socket.on("connect", () => {
@@ -98,6 +223,8 @@ socket.on("connect", () => {
     reloadConfig();
     fetchFatigue();
     fetchWind();
+    fetchSystemStatus();
+    fetchDataList(currentDataPath);
 });
 
 socket.on("devices", (payload) => {
@@ -123,13 +250,18 @@ function setActiveTab(name) {
     document.getElementById("monitor-panel").classList.toggle("active", name === "monitor");
     document.getElementById("config-panel").classList.toggle("active", name === "config");
     document.getElementById("fatigue-panel").classList.toggle("active", name === "fatigue");
+    document.getElementById("status-panel").classList.toggle("active", name === "status");
     document.getElementById("tab-monitor").classList.toggle("active", name === "monitor");
     document.getElementById("tab-config").classList.toggle("active", name === "config");
     document.getElementById("tab-fatigue").classList.toggle("active", name === "fatigue");
+    document.getElementById("tab-status").classList.toggle("active", name === "status");
     if (name === "monitor") {
         requestAnimationFrame(resizeAllPlots);
     } else if (name === "fatigue") {
         requestAnimationFrame(renderFatigue);
+    } else if (name === "status") {
+        fetchSystemStatus();
+        fetchDataList(currentDataPath);
     }
 }
 

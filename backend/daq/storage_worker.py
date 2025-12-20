@@ -72,7 +72,13 @@ class StorageService:
             return
         display_name = snap.get("display_name") or snap.get("device") or "device"
         filename = self.filename_format.format(display_name=display_name, ts=ts_str)
-        path = self.output_dir / filename
+        # Organize by month/day folders for cleaner data directory
+        local_ts = ts.astimezone()
+        month = local_ts.strftime("%Y%m")
+        day = local_ts.strftime("%d")
+        dest_dir = self.output_dir / month / day
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        path = dest_dir / filename
         group_name = "Data"
         wf_start_time = snap.get("start_time") or ts  # timezone-aware UTC datetime
         fs = snap.get("effective_sample_rate") or snap.get("sample_rate")
