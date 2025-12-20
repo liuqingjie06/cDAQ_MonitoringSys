@@ -1,3 +1,4 @@
+import csv
 import json
 import datetime
 from pathlib import Path
@@ -143,31 +144,75 @@ class DamageLogger:
         }
 
     def write_window(self, device_name: str, stats: list, fatigue: dict, start_ts: float):
+        """
+        Persist window stats to CSV (one file per day).
+        Header is written once per file.
+        """
         dt = datetime.datetime.fromtimestamp(start_ts)
         date_str = dt.strftime("%Y%m%d")
-        file_path = self.data_dir / f"{date_str}.txt"
+        file_path = self.data_dir / f"{date_str}.csv"
 
-        lines = []
+        header = [
+            "timestamp",
+            "device",
+            "type",       # stat / fatigue
+            "channel",
+            "acc_max",
+            "acc_min",
+            "acc_rms",
+            "disp_max",
+            "disp_min",
+            "disp_rms",
+            "fatigue_Dmax",
+            "fatigue_phi_deg",
+            "fatigue_Sa_max",
+        ]
+
+        rows = []
         for idx, st in enumerate(stats):
             if st["count"] == 0:
                 continue
             rms = (st["sumsq"] / st["count"]) ** 0.5 if st["count"] else 0.0
-            line = (
-                f"{dt.strftime('%Y-%m-%d %H:%M:%S')},"
-                f"device={device_name},ch={idx},"
-                f"max={st['max']:.6f},min={st['min']:.6f},rms={rms:.6f}"
-            )
-            lines.append(line)
+            rows.append({
+                "timestamp": dt.strftime("%Y-%m-%d %H:%M:%S"),
+                "device": device_name,
+                "type": "stat",
+                "channel": idx,
+                "acc_max": st["max"],
+                "acc_min": st["min"],
+                "acc_rms": rms,
+                "disp_max": None,
+                "disp_min": None,
+                "disp_rms": None,
+                "fatigue_Dmax": None,
+                "fatigue_phi_deg": None,
+                "fatigue_Sa_max": None,
+            })
 
         if fatigue:
-            lines.append(
-                f"{dt.strftime('%Y-%m-%d %H:%M:%S')},device={device_name},"
-                f"fatigue_Dmax={fatigue.get('Dmax',0):.6e},"
-                f"phi_deg={fatigue.get('phi_deg',0):.2f},"
-                f"Sa_max={fatigue.get('Sa_max',0):.4f}"
-            )
+            rows.append({
+                "timestamp": dt.strftime("%Y-%m-%d %H:%M:%S"),
+                "device": device_name,
+                "type": "fatigue",
+                "channel": None,
+                "acc_max": None,
+                "acc_min": None,
+                "acc_rms": None,
+                "disp_max": None,
+                "disp_min": None,
+                "disp_rms": None,
+                "fatigue_Dmax": fatigue.get("Dmax", 0.0),
+                "fatigue_phi_deg": fatigue.get("phi_deg", 0.0),
+                "fatigue_Sa_max": fatigue.get("Sa_max", 0.0),
+            })
 
-        if lines:
-            with file_path.open("a", encoding="utf-8") as f:
-                for line in lines:
-                    f.write(line + "\n")
+        if not rows:
+            return
+
+        file_exists = file_path.exists()
+        with file_path.open("a", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=header)
+            if not file_exists:
+                writer.writeheader()
+            for row in rows:
+                writer.writerow(row)

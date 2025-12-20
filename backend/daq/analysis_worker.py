@@ -1,6 +1,7 @@
 import threading
 import time
 import queue
+import threading
 import numpy as np
 
 from .analysis import fatigue_damage, acc_to_disp
@@ -72,7 +73,7 @@ class AnalysisWorker:
         disp_stats = []
         for idx, arr in enumerate(self.analysis_buffers):
             if not arr:
-                disp_stats.append({"max": 0.0, "min": 0.0})
+                disp_stats.append({"max": 0.0, "min": 0.0, "rms": 0.0, "p2p": 0.0})
                 continue
             unit = ""
             try:
@@ -84,10 +85,31 @@ class AnalysisWorker:
                 data = data * 9.80665
             disp = acc_to_disp(data, fs=self.sample_rate)
             if disp.size:
-                disp_stats.append({"max": float(np.max(disp)), "min": float(np.min(disp))})
+                dmax = float(np.max(disp))
+                dmin = float(np.min(disp))
+                rms = float(np.sqrt(np.mean(disp ** 2)))
+                p2p = float(dmax - dmin)
+                disp_stats.append({"max": dmax, "min": dmin, "rms": rms, "p2p": p2p})
             else:
-                disp_stats.append({"max": 0.0, "min": 0.0})
+                disp_stats.append({"max": 0.0, "min": 0.0, "rms": 0.0, "p2p": 0.0})
         return disp_stats
+
+    def _dominant_freq_hz(self, data_arr: np.ndarray) -> float | None:
+        """Return dominant frequency (Hz) for a real signal; None if insufficient data."""
+        if data_arr.size < 2 or self.sample_rate <= 0:
+            return None
+        try:
+            window = np.hanning(data_arr.size)
+            X = np.fft.rfft(data_arr * window)
+            freqs = np.fft.rfftfreq(data_arr.size, d=1.0 / self.sample_rate)
+            if freqs.size < 2:
+                return None
+            mag = np.abs(X)
+            # skip DC
+            idx = int(np.argmax(mag[1:])) + 1
+            return float(freqs[idx])
+        except Exception:
+            return None
 
     def _loop(self):
         while self.running:
@@ -148,10 +170,15 @@ class AnalysisWorker:
                         "channels": [
                             {
                                 "ch": i,
-                                "acc_max": s["max"],
-                                "acc_min": s["min"],
+                                "acc_max": None if s["count"] == 0 else s["max"],
+                                "acc_min": None if s["count"] == 0 else s["min"],
+                                "acc_rms": None if s["count"] == 0 else (s["sumsq"] / s["count"]) ** 0.5,
+                                "acc_p2p": None if s["count"] == 0 else (s["max"] - s["min"]),
                                 "disp_max": disp_stats[i]["max"] if i < len(disp_stats) else None,
                                 "disp_min": disp_stats[i]["min"] if i < len(disp_stats) else None,
+                                "disp_rms": disp_stats[i]["rms"] if i < len(disp_stats) else None,
+                                "disp_p2p": disp_stats[i]["p2p"] if i < len(disp_stats) else None,
+                                "main_freq_hz": self._dominant_freq_hz(np.asarray(self.analysis_buffers[i], dtype=float)) if i < len(self.analysis_buffers) else None,
                             }
                             for i, s in enumerate(self.log_stats)
                         ],
