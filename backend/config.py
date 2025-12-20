@@ -13,6 +13,7 @@ ROOT_DIR = Path(__file__).parent
 CONFIG_FILE = ROOT_DIR / "config.json"
 
 DEFAULT_CONFIG: Dict[str, Any] = {
+    "effective_sample_rate": 2000,
     "sample_rate": 2000,
     "samples_per_read": 4000,
     "fft_interval": 0.5,
@@ -70,3 +71,15 @@ def save_config(data: Dict[str, Any]) -> None:
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     with CONFIG_FILE.open("w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+# Convenience module-level constants for legacy imports
+_CONFIG_CACHE = load_config()
+
+SAMPLE_RATE = _CONFIG_CACHE.get("sample_rate")
+SAMPLES_PER_READ = _CONFIG_CACHE.get("samples_per_read")
+FFT_INTERVAL = _CONFIG_CACHE.get("fft_interval")
+EFFECTIVE_SAMPLE_RATE = _CONFIG_CACHE.get("effective_sample_rate", SAMPLE_RATE)
+DEFAULT_DEVICES = _CONFIG_CACHE.get("devices", {})
+WIND_CONFIG = _CONFIG_CACHE.get("wind", {})
+IOT_CONFIG = _CONFIG_CACHE.get("iot", {})

@@ -62,11 +62,11 @@ class StorageService:
             if not snap or not snap.get("data"):
                 continue
             try:
-                self._write_tdms(ts_str, snap)
+                self._write_tdms(ts, ts_str, snap)
             except Exception as e:
                 print(f"[storage] write error for {name}:", e)
 
-    def _write_tdms(self, ts_str: str, snap: dict):
+    def _write_tdms(self, ts: datetime, ts_str: str, snap: dict):
         data = snap.get("data") or []
         if not any(len(ch) for ch in data):
             return
@@ -74,6 +74,9 @@ class StorageService:
         filename = self.filename_format.format(display_name=display_name, ts=ts_str)
         path = self.output_dir / filename
         group_name = "Data"
+        wf_start_time = snap.get("start_time") or ts
+        fs = snap.get("effective_sample_rate") or snap.get("sample_rate")
+        wf_increment = 1.0 / fs if fs else None
 
         channels = []
         ch_cfgs = snap.get("channels") or []
@@ -81,15 +84,37 @@ class StorageService:
             try:
                 ch_id = ch_cfgs[idx].get("id", idx)
                 unit = ch_cfgs[idx].get("unit", "")
+                remark = ch_cfgs[idx].get("remark", "")
+                sensitivity = ch_cfgs[idx].get("sensitivity")
+                coupling = ch_cfgs[idx].get("coupling")
+                ch_type = ch_cfgs[idx].get("type")
+                iepe = ch_cfgs[idx].get("iepe")
             except Exception:
                 ch_id = idx
                 unit = ""
+                remark = ""
+                sensitivity = None
+                coupling = None
+                ch_type = None
+                iepe = None
             ch_name = f"CH{ch_id}"
             arr = np.asarray(ch_data, dtype=float)
             props = {
                 "sample_rate": snap.get("sample_rate"),
+                "effective_sample_rate": fs,
                 "unit": unit,
+                "unit_string": unit,  # TDMS waveform unit
+                "remark": remark,
+                "sensitivity": sensitivity,
+                "coupling": coupling,
+                "type": ch_type,
+                "iepe": iepe,
             }
+            if wf_increment:
+                props["wf_increment"] = wf_increment  # dt in seconds
+                props["wf_time_unit"] = "s"
+            if wf_start_time:
+                props["wf_start_time"] = wf_start_time
             channels.append(ChannelObject(group_name, ch_name, arr, properties=props))
 
         with TdmsWriter(path) as writer:

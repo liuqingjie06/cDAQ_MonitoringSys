@@ -7,7 +7,7 @@
     "enabled": true,
     "interval_s": 600,
     "duration_s": 30,
-    "output_dir": "backend/data",
+    "output_dir": "data",
     "filename_format": "{display_name}_{ts}.tdms"
   },
   "devices": {
