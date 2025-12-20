@@ -12,7 +12,7 @@
           "coupling": "DC",
           "type": "acc",
           "unit": "g",
-          "sensitivity": 80,
+          "sensitivity": 0.001,
           "iepe": false,
           "remark": "X-axis"
         },
@@ -22,7 +22,7 @@
           "coupling": "DC",
           "type": "acc",
           "unit": "g",
-          "sensitivity": 1,
+          "sensitivity": 0.002,
           "iepe": false,
           "remark": "Y-axis"
         },

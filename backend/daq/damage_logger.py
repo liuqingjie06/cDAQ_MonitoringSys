@@ -1,6 +1,7 @@
 import csv
 import json
 import datetime
+import threading
 from pathlib import Path
 
 
@@ -10,11 +11,14 @@ class DamageLogger:
     """
     def __init__(self, device_name: str, data_dir: Path, dphi_deg: float = 5.0):
         self.device_name = device_name
-        self.data_dir = data_dir
-        self.data_dir.mkdir(exist_ok=True)
-        self.damage_file = self.data_dir / "damage_cumulative.txt"
+        # Per-device directory to avoid cross-device conflicts
+        self.base_dir = data_dir
+        self.data_dir = data_dir / device_name
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.damage_file = self.data_dir / "damage_cumulative.json"
         self.backup_file = self.data_dir / "damage_cumulative.bak"
         self.dphi_deg = dphi_deg
+        self._lock = threading.Lock()
 
         self.cum_phi = None
         self.cum_damage = None
@@ -65,25 +69,26 @@ class DamageLogger:
         self._write_cumulative()
 
     def _write_cumulative(self):
-        payload = {
-            "timestamp": self.cum_timestamp,
-            "device": self.device_name,
-            "phi_deg_list": self.cum_phi,
-            "D_phi_cum": self.cum_damage,
-            "D_cum_max": max(self.cum_damage) if self.cum_damage else 0.0,
-            "phi_deg_cum": self.cum_phi[self.cum_damage.index(max(self.cum_damage))] if self.cum_damage else 0.0,
-        }
-        data = json.dumps(payload, ensure_ascii=False, indent=2)
-        # Best-effort backup of last good file, then atomic replace.
-        try:
-            if self.damage_file.exists():
-                self.backup_file.write_text(self.damage_file.read_text(encoding="utf-8"), encoding="utf-8")
-        except Exception:
-            pass
+        with self._lock:
+            payload = {
+                "timestamp": self.cum_timestamp,
+                "device": self.device_name,
+                "phi_deg_list": self.cum_phi,
+                "D_phi_cum": self.cum_damage,
+                "D_cum_max": max(self.cum_damage) if self.cum_damage else 0.0,
+                "phi_deg_cum": self.cum_phi[self.cum_damage.index(max(self.cum_damage))] if self.cum_damage else 0.0,
+            }
+            data = json.dumps(payload, ensure_ascii=False, indent=2)
+            # Best-effort backup of last good file, then atomic replace.
+            try:
+                if self.damage_file.exists():
+                    self.backup_file.write_text(self.damage_file.read_text(encoding="utf-8"), encoding="utf-8")
+            except Exception:
+                pass
 
-        tmp = self.data_dir / (self.damage_file.name + ".tmp")
-        tmp.write_text(data, encoding="utf-8")
-        tmp.replace(self.damage_file)
+            tmp = self.data_dir / (self.damage_file.name + ".tmp")
+            tmp.write_text(data, encoding="utf-8")
+            tmp.replace(self.damage_file)
 
     def update_cumulative(self, fatigue: dict, ts: datetime.datetime) -> dict:
         phi_list = fatigue.get("phi_deg_list") or []
@@ -115,24 +120,26 @@ class DamageLogger:
                     except Exception:
                         self.cum_damage[i] = 0.0
 
-        self.cum_damage = [c + d for c, d in zip(self.cum_damage, d_list)]
-        self.cum_timestamp = ts.isoformat()
+        with self._lock:
+            self.cum_damage = [c + d for c, d in zip(self.cum_damage, d_list)]
+            self.cum_timestamp = ts.isoformat()
 
-        D_cum_max = max(self.cum_damage) if self.cum_damage else 0.0
-        idx_max = self.cum_damage.index(D_cum_max) if self.cum_damage else 0
-        phi_deg_cum = self.cum_phi[idx_max] if self.cum_phi else 0.0
+            D_cum_max = max(self.cum_damage) if self.cum_damage else 0.0
+            idx_max = self.cum_damage.index(D_cum_max) if self.cum_damage else 0
+            phi_deg_cum = self.cum_phi[idx_max] if self.cum_phi else 0.0
 
-        fatigue["D_phi_cum"] = list(self.cum_damage)
-        fatigue["D_cum_max"] = D_cum_max
-        fatigue["phi_deg_cum"] = phi_deg_cum
+            fatigue["D_phi_cum"] = list(self.cum_damage)
+            fatigue["D_cum_max"] = D_cum_max
+            fatigue["phi_deg_cum"] = phi_deg_cum
 
         self._write_cumulative()
         return fatigue
 
     def reset_cumulative(self):
         """Reset cumulative damage to zeros and persist."""
-        self.cum_phi, self.cum_damage = self._default_bins(self.dphi_deg)
-        self.cum_timestamp = datetime.datetime.now().isoformat()
+        with self._lock:
+            self.cum_phi, self.cum_damage = self._default_bins(self.dphi_deg)
+            self.cum_timestamp = datetime.datetime.now().isoformat()
         self._write_cumulative()
         return {
             "timestamp": self.cum_timestamp,
@@ -143,14 +150,22 @@ class DamageLogger:
             "phi_deg_cum": 0.0,
         }
 
+    def _stats_csv_path(self, ts: datetime.datetime) -> Path:
+        """Return per-device CSV path organized by month/day."""
+        local_ts = ts
+        month = local_ts.strftime("%Y%m")
+        day = local_ts.strftime("%d")
+        dest_dir = self.data_dir / month
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        return dest_dir / f"{day}.csv"
+
     def write_window(self, device_name: str, stats: list, fatigue: dict, start_ts: float):
         """
-        Persist window stats to CSV (one file per day).
+        Persist window stats to CSV (per device, per day under device/month/day.csv).
         Header is written once per file.
         """
         dt = datetime.datetime.fromtimestamp(start_ts)
-        date_str = dt.strftime("%Y%m%d")
-        file_path = self.data_dir / f"{date_str}.csv"
+        file_path = self._stats_csv_path(dt)
 
         header = [
             "timestamp",
@@ -210,7 +225,7 @@ class DamageLogger:
             return
 
         file_exists = file_path.exists()
-        with file_path.open("a", encoding="utf-8", newline="") as f:
+        with self._lock, file_path.open("a", encoding="utf-8", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=header)
             if not file_exists:
                 writer.writeheader()
