@@ -7,6 +7,8 @@ class DeviceManager:
         self.devices = {}
         storage_cfg = storage_cfg or {}
         storage_duration = storage_cfg.get("duration_s", 60)
+        self.storage_service = None
+        self.storage_cfg = storage_cfg
 
         for name, dev_cfg in devices_cfg.items():
             self.devices[name] = DAQDevice(
@@ -19,6 +21,16 @@ class DeviceManager:
                 storage_duration_s=storage_duration,
             )
             self.devices[name].socketio = socketio
+
+        # Optional TDMS storage service
+        if storage_cfg.get("enabled"):
+            try:
+                from .storage_worker import StorageService
+                self.storage_service = StorageService(self, storage_cfg)
+                self.storage_service.start()
+            except Exception as e:
+                # Non-fatal: continue without storage
+                print("[storage] init error:", e)
 
     def start(self, name):
         if name in self.devices:
@@ -37,6 +49,11 @@ class DeviceManager:
         """Stop all running devices."""
         for dev in self.devices.values():
             dev.stop()
+        if self.storage_service:
+            try:
+                self.storage_service.stop()
+            except Exception:
+                pass
 
     def get_status(self):
         return {

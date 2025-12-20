@@ -1,7 +1,7 @@
 import threading
 import time
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 import numpy as np
 from nptdms import TdmsWriter, ChannelObject
@@ -55,7 +55,7 @@ class StorageService:
             self._stop.wait(wait_for)
 
     def _run_once(self):
-        ts = datetime.now()
+        ts = datetime.now(timezone.utc)  # store as UTC so viewers show local correctly
         ts_str = ts.strftime("%d%m%y_%H%M%S")
         for name, dev in (self.device_manager.devices or {}).items():
             snap = dev.capture_snapshot(self.duration_s)
@@ -74,9 +74,14 @@ class StorageService:
         filename = self.filename_format.format(display_name=display_name, ts=ts_str)
         path = self.output_dir / filename
         group_name = "Data"
-        wf_start_time = snap.get("start_time") or ts
+        wf_start_time = snap.get("start_time") or ts  # timezone-aware UTC datetime
         fs = snap.get("effective_sample_rate") or snap.get("sample_rate")
-        wf_increment = 1.0 / fs if fs else None
+        wf_increment = float(1.0 / fs) if fs else None
+        # TDMS waveform metadata so viewers know time axis
+        wf_start_offset = 0.0  # seconds from wf_start_time
+        wf_start_index = 0
+        wf_xname = "Time"
+        wf_xunit_string = "s"
 
         channels = []
         ch_cfgs = snap.get("channels") or []
@@ -111,10 +116,16 @@ class StorageService:
                 "iepe": iepe,
             }
             if wf_increment:
-                props["wf_increment"] = wf_increment  # dt in seconds
-                props["wf_time_unit"] = "s"
+                props["wf_increment"] = float(wf_increment)  # dt in seconds
+                props["wf_start_time"] = wf_start_time  # datetime for TDMS waveform
+                props["wf_start_offset"] = float(wf_start_offset)
+                props["wf_start_index"] = int(wf_start_index)
+                props["wf_samples"] = int(len(arr))
+                props["wf_xname"] = wf_xname
+                props["wf_xunit_string"] = wf_xunit_string
+                props["wf_time_reference"] = "absolute"  # hint for readers: absolute time, not relative
             if wf_start_time:
-                props["wf_start_time"] = wf_start_time
+                props.setdefault("wf_start_time", wf_start_time)
             channels.append(ChannelObject(group_name, ch_name, arr, properties=props))
 
         with TdmsWriter(path) as writer:

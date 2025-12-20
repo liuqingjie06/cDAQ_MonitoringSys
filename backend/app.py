@@ -41,6 +41,11 @@ def _build_device_manager(cfg: dict) -> DeviceManager:
         sys_cfg=sys_cfg,
         storage_cfg=cfg.get("storage") or {},
     )
+    # Auto-start all devices on backend launch/config reload so system runs headless.
+    try:
+        device_manager.start_all()
+    except Exception:
+        pass
     return device_manager
 
 

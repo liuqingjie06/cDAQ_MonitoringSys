@@ -77,7 +77,8 @@
 /* =====================================================
    Socket.IO 连接
 ===================================================== */
-const socket = io("http://127.0.0.1:5000");
+// Use current host so LAN/mobile works (avoid hardcoded 127.0.0.1)
+const socket = io();
 let deviceConfigs = {};
 let configData = {};
 let deviceStatus = {};
@@ -402,6 +403,40 @@ function renderConfigForm() {
     document.getElementById("cfg-wind-mode")?.addEventListener("change", updateWindModeUI);
     updateWindModeUI();
 
+    // 文件存储
+    const storageCfg = configData.storage || {};
+    const storageBox = document.createElement("div");
+    storageBox.className = "mb-3";
+    storageBox.innerHTML = `
+        <h5>文件存储</h5>
+        <div class="row g-2">
+            <div class="col-12 col-md-2">
+                <label class="form-label">启用</label>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="cfg-storage-enabled" ${storageCfg.enabled ? "checked" : ""}>
+                    <label class="form-check-label" for="cfg-storage-enabled">按间隔保存 TDMS</label>
+                </div>
+            </div>
+            <div class="col-12 col-md-2">
+                <label class="form-label">间隔 (s)</label>
+                <input type="number" step="1" min="10" id="cfg-storage-interval" class="form-control form-control-sm" value="${storageCfg.interval_s ?? 600}">
+            </div>
+            <div class="col-12 col-md-2">
+                <label class="form-label">时长 (s)</label>
+                <input type="number" step="1" min="1" id="cfg-storage-duration" class="form-control form-control-sm" value="${storageCfg.duration_s ?? 30}">
+            </div>
+            <div class="col-12 col-md-3">
+                <label class="form-label">输出目录</label>
+                <input type="text" id="cfg-storage-output" class="form-control form-control-sm" value="${storageCfg.output_dir || "data"}">
+            </div>
+            <div class="col-12 col-md-3">
+                <label class="form-label">文件名格式</label>
+                <input type="text" id="cfg-storage-format" class="form-control form-control-sm" value="${storageCfg.filename_format || "{display_name}_{ts}.tdms"}">
+            </div>
+        </div>
+    `;
+    container.appendChild(storageBox);
+
     // Devices + channels
     const devBox = document.createElement("div");
     devBox.innerHTML = "<h5>设备与通道</h5>";
@@ -510,6 +545,21 @@ function readConfigForm() {
                     baudrate,
                     slave_id: slaveId,
                 }
+            };
+        })(),
+        storage: (() => {
+            const enabled = document.getElementById("cfg-storage-enabled")?.checked ?? false;
+            const interval = Number(document.getElementById("cfg-storage-interval")?.value || (configData.storage?.interval_s ?? 600));
+            const duration = Number(document.getElementById("cfg-storage-duration")?.value || (configData.storage?.duration_s ?? 30));
+            const outputDir = document.getElementById("cfg-storage-output")?.value || (configData.storage?.output_dir || "data");
+            const filenameFormat = document.getElementById("cfg-storage-format")?.value || (configData.storage?.filename_format || "{display_name}_{ts}.tdms");
+            return {
+                ...(configData.storage || {}),
+                enabled,
+                interval_s: interval,
+                duration_s: duration,
+                output_dir: outputDir,
+                filename_format: filenameFormat,
             };
         })(),
     };

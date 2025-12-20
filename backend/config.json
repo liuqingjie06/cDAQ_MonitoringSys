@@ -3,13 +3,6 @@
   "sample_rate": 1600,
   "samples_per_read": 1600,
   "fft_interval": 0.5,
-  "storage": {
-    "enabled": true,
-    "interval_s": 600,
-    "duration_s": 30,
-    "output_dir": "data",
-    "filename_format": "{display_name}_{ts}.tdms"
-  },
   "devices": {
     "cDAQ3": {
       "channels": [
@@ -71,5 +64,12 @@
     "sample_interval_s": 1,
     "sim_seed": 1,
     "stats_interval_s": 600
+  },
+  "storage": {
+    "duration_s": 30,
+    "enabled": true,
+    "filename_format": "{display_name}_{ts}.tdms",
+    "interval_s": 600,
+    "output_dir": "data"
   }
 }

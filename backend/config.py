@@ -17,6 +17,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "sample_rate": 2000,
     "samples_per_read": 4000,
     "fft_interval": 0.5,
+    "storage": {
+        "enabled": False,
+        "interval_s": 600,
+        "duration_s": 30,
+        "output_dir": "data",
+        "filename_format": "{display_name}_{ts}.tdms",
+    },
     "wind": {
         "enabled": True,
         "mode": "sim",  # sim / rs485
