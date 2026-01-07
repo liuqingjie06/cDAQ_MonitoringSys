@@ -20,6 +20,8 @@ class DAQDevice:
         effective_sample_rate: int,
         samples_per_read: int,
         fft_interval: float,
+        fft_window_s: float | None = None,
+        disp_method: str | None = None,
         storage_duration_s: float = 60.0,
     ):
         self.name = name
@@ -31,18 +33,29 @@ class DAQDevice:
         self.effective_sample_rate = effective_sample_rate
         self.samples_per_read = samples_per_read
         self.fft_interval = fft_interval
+        self.fft_window_s = float(fft_window_s) if fft_window_s else 30.0
+        self.disp_method = disp_method or "fft"
         self.decimation = max(1, int(round(self.sample_rate / max(1, self.effective_sample_rate))))
+        self._decim_kernel = None
+        self._decim_state = [np.zeros(0, dtype=float) for _ in self.channels]
 
         self.running = False
-        # ring buffers for frontend streaming
+        # ring buffers for frontend streaming (keep enough for the fixed 30s display window)
+        eff_rate = max(1, int(self.effective_sample_rate or self.sample_rate))
+        buf_len = max(int(eff_rate * self.fft_window_s), self.samples_per_read)
         self.buffers = [
-            deque(maxlen=sample_rate * 5)
+            deque(maxlen=buf_len)
             for _ in self.channels
         ]
-        # ring buffers for storage snapshots (raw, non-decimated)
+        self.disp_buffers = [
+            deque(maxlen=buf_len)
+            for _ in self.channels
+        ]
+        # ring buffers for storage snapshots (decimated)
         self.storage_duration_s = max(1.0, float(storage_duration_s))
+        eff_rate = max(1, int(self.effective_sample_rate or self.sample_rate))
         self.storage_buffers = [
-            deque(maxlen=int(self.sample_rate * self.storage_duration_s))
+            deque(maxlen=int(eff_rate * self.storage_duration_s))
             for _ in self.channels
         ]
         self.last_fft_time = 0.0
@@ -57,6 +70,7 @@ class DAQDevice:
             log_interval=600.0,
             damage_logger=self.damage_logger,
             channels_cfg=self.channels,
+            disp_method=self.disp_method,
         )
         self.runner = DAQRunner(
             name=self.name,
@@ -93,16 +107,29 @@ class DAQDevice:
             pass
 
     def _on_samples(self, data):
-        # optional decimation for downstream processing, with simple low-pass (boxcar) to reduce aliasing
+        # optional decimation for downstream processing, apply low-pass before downsample
         decimated = []
-        for ch_data in data:
+        for ch_idx, ch_data in enumerate(data):
             if self.decimation > 1:
                 try:
                     arr = np.asarray(ch_data, dtype=float)
-                    # boxcar low-pass then decimate
-                    kernel = np.ones(self.decimation) / self.decimation
-                    filt = np.convolve(arr, kernel, mode="same")
-                    decimated.append(filt[:: self.decimation].tolist())
+                    kernel = self._decim_kernel
+                    if kernel is None:
+                        kernel = self._build_decimation_kernel()
+                        self._decim_kernel = kernel
+                    if kernel is not None:
+                        state = self._decim_state[ch_idx]
+                        pad_len = max(0, len(kernel) - 1)
+                        if state.size != pad_len:
+                            state = np.zeros(pad_len, dtype=float)
+                        x = np.concatenate([state, arr])
+                        # valid conv returns length == len(arr), aligned to current chunk
+                        filt = np.convolve(x, kernel, mode="valid")
+                        if pad_len > 0:
+                            self._decim_state[ch_idx] = x[-pad_len:]
+                        decimated.append(filt[:: self.decimation].tolist())
+                    else:
+                        decimated.append(arr[:: self.decimation].tolist())
                 except Exception:
                     decimated.append(ch_data)
             else:
@@ -111,8 +138,29 @@ class DAQDevice:
         # update buffers for streaming using decimated data
         for i, ch_data in enumerate(decimated):
             self.buffers[i].extend(ch_data)
-        # update storage buffers using raw data
+        # compute displacement on raw data, then downsample to match effective rate
         for i, ch_data in enumerate(data):
+            try:
+                arr = np.asarray(ch_data, dtype=float)
+                if arr.size == 0:
+                    continue
+                unit = ""
+                try:
+                    unit = (self.channels[i].get("unit") or "").lower()
+                except Exception:
+                    unit = ""
+                if unit == "g":
+                    arr = arr * 9.80665
+                disp_raw = acc_to_disp(arr, fs=self.sample_rate, method=self.disp_method)
+                if self.decimation > 1:
+                    disp_dec = disp_raw[:: self.decimation]
+                else:
+                    disp_dec = disp_raw
+                self.disp_buffers[i].extend(disp_dec.tolist() if hasattr(disp_dec, "tolist") else list(disp_dec))
+            except Exception:
+                pass
+        # update storage buffers using decimated data
+        for i, ch_data in enumerate(decimated):
             self.storage_buffers[i].extend(ch_data)
 
         payload = self._build_payload()
@@ -135,39 +183,50 @@ class DAQDevice:
         if target <= 0:
             target = actual
         self.decimation = max(1, int(round(actual / target)))
+        self._decim_kernel = self._build_decimation_kernel()
+        self._decim_state = [np.zeros(0, dtype=float) for _ in self.channels]
+
+    def _build_decimation_kernel(self):
+        if self.decimation <= 1:
+            return None
+        fs_in = float(self.sample_rate or 1)
+        fs_out = float(self.effective_sample_rate or fs_in)
+        cutoff_hz = 0.45 * (fs_out / 2.0)
+        fc = max(0.001, min(cutoff_hz / fs_in, 0.49))
+        taps = max(31, self.decimation * 8 + 1)
+        if taps % 2 == 0:
+            taps += 1
+        n = np.arange(taps, dtype=float)
+        m = (taps - 1) / 2.0
+        h = 2.0 * fc * np.sinc(2.0 * fc * (n - m))
+        h *= np.hanning(taps)
+        h /= np.sum(h)
+        return h
 
     # ==========================================================
     # Helpers for streaming
     # ==========================================================
     def _build_payload(self):
-        n = self.samples_per_read
-        time_data = [
-            list(self.buffers[i])[-n:]
-            for i in range(len(self.buffers))
-        ]
+        # use available samples (decimated) to avoid empty payload when samples_per_read is large
+        time_data = []
+        eff_rate = max(1, int(self.effective_sample_rate or self.sample_rate))
+        n_limit = int(eff_rate * self.fft_window_s)
+        for buf in self.buffers:
+            n = min(n_limit, len(buf))
+            time_data.append(list(buf)[-n:] if n > 0 else [])
 
         payload = {
             "device": self.name,
             "display_name": self.display_name,
             "time_data": time_data,
         }
-        # displacement (simple double integration) for first two channels
+        # displacement from raw->downsampled buffer
         try:
             disp = []
-            for idx, ch in enumerate(time_data[:2]):
-                arr = np.asarray(ch, dtype=float)
-                if arr.size == 0:
-                    disp.append([])
-                    continue
-                unit = ""
-                try:
-                    unit = (self.channels[idx].get("unit") or "").lower()
-                except Exception:
-                    unit = ""
-                # convert g to m/s^2 if needed
-                if unit == "g":
-                    arr = arr * 9.80665
-                disp.append(acc_to_disp(arr, fs=self.effective_sample_rate or self.sample_rate).tolist())
+            n_limit = int(eff_rate * self.fft_window_s)
+            for buf in self.disp_buffers[:2]:
+                n = min(n_limit, len(buf))
+                disp.append(list(buf)[-n:] if n > 0 else [])
             payload["displacement"] = disp
         except Exception:
             payload["displacement"] = []
@@ -184,8 +243,9 @@ class DAQDevice:
         fft_result = []
 
         for buf in self.buffers:
-            x = np.array(list(buf)[-n:])
-            if len(x) < n:
+            n_use = min(n, len(buf))
+            x = np.array(list(buf)[-n_use:])
+            if len(x) < 2:
                 fft_result.append([])
                 continue
 
@@ -201,12 +261,18 @@ class DAQDevice:
         import numpy as np
         if not decimated_data or len(decimated_data) < 2:
             return None
-        # Use effective sample rate for frequency axis
         fs = self.effective_sample_rate or self.sample_rate
+        if not fs:
+            return None
+        n_fft = int(fs * self.fft_window_s)
+        if n_fft <= 1:
+            return None
+        if not self.buffers or len(self.buffers[0]) < n_fft:
+            return None
         spectra = []
         freq = None
-        for ch in decimated_data[:2]:
-            arr = np.asarray(ch, dtype=float)
+        for buf in self.buffers[:2]:
+            arr = np.asarray(list(buf)[-n_fft:], dtype=float)
             if arr.size < 2:
                 spectra.append([])
                 continue
@@ -225,7 +291,7 @@ class DAQDevice:
     def get_fatigue_snapshot(self):
         sn_sa, sn_n = build_sn_curve(et=2.05e5)
         params = {
-            "fs": self.sample_rate,
+            "fs": self.effective_sample_rate,
             "k_disp2stress": 90.62 / 0.4,
             "et": 2.05e5,
             "dphi_deg": 5.0,
@@ -280,11 +346,12 @@ class DAQDevice:
     # ==========================================================
     def capture_snapshot(self, duration_s: float | None = None):
         """
-        Return last duration_s seconds of raw data for each channel.
+        Return last duration_s seconds of decimated data for each channel.
         """
         if duration_s is None or duration_s <= 0:
             duration_s = self.storage_duration_s
-        count = int(duration_s * self.sample_rate)
+        eff_rate = self.effective_sample_rate or self.sample_rate
+        count = int(duration_s * eff_rate)
         data = []
         for buf in self.storage_buffers:
             arr = list(buf)
@@ -294,7 +361,8 @@ class DAQDevice:
         return {
             "device": self.name,
             "display_name": self.display_name,
-            "sample_rate": self.sample_rate,
+            "sample_rate": eff_rate,
+            "effective_sample_rate": eff_rate,
             "channels": self.channels,
             "data": data,
         }

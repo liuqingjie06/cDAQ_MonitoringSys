@@ -84,9 +84,6 @@ class DAQRunner:
 
     def stop(self):
         self.running = False
-        if self.thread:
-            self.thread.join(timeout=1.0)
-            self.thread = None
         if self.task:
             try:
                 self.task.stop()
@@ -94,14 +91,20 @@ class DAQRunner:
             except Exception:
                 pass
             self.task = None
+        if self.thread:
+            self.thread.join(timeout=2.0)
+            self.thread = None
         print(f"[{self.name}] DAQ stopped")
 
     def _loop(self):
         while self.running:
             try:
+                # Timeout scaled to requested chunk duration to avoid -200284 when chunk spans >1s
+                chunk_sec = self.samples_per_read / float(self.sample_rate) if self.sample_rate else 1.0
+                read_timeout = max(1.0, chunk_sec * 2.0)
                 data = self.task.read(
                     number_of_samples_per_channel=self.samples_per_read,
-                    timeout=1.0  # avoid hang if device is unplugged
+                    timeout=read_timeout
                 )
                 if self.on_samples:
                     self.on_samples(data)

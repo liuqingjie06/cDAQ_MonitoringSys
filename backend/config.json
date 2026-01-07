@@ -1,8 +1,10 @@
 {
-  "effective_sample_rate": 1600,
+  "effective_sample_rate": 10,
   "sample_rate": 1600,
-  "samples_per_read": 1600,
-  "fft_interval": 0.5,
+  "samples_per_read": 3200,
+  "fft_interval": 60,
+  "fft_window_s": 120,
+  "disp_method": "fft",
   "devices": {
     "cDAQ3": {
       "channels": [
@@ -12,7 +14,7 @@
           "coupling": "DC",
           "type": "acc",
           "unit": "g",
-          "sensitivity": 0.001,
+          "sensitivity": 1995.115,
           "iepe": false,
           "remark": "X-axis"
         },
@@ -22,7 +24,7 @@
           "coupling": "DC",
           "type": "acc",
           "unit": "g",
-          "sensitivity": 0.002,
+          "sensitivity": 1993.628,
           "iepe": false,
           "remark": "Y-axis"
         },
@@ -37,7 +39,7 @@
           "remark": "Y-axis"
         }
       ],
-      "display_name": "塔110201",
+      "display_name": "1300-T-501",
       "model": "cDAQ3Mod1"
     }
   },
@@ -55,21 +57,28 @@
   },
   "wind": {
     "enabled": true,
-    "mode": "sim",
+    "mode": "rs485",
     "rs485": {
       "baudrate": 9600,
+      "bytesize": 8,
+      "parity": "N",
       "port": "COM3",
-      "slave_id": 1
+      "register_count": 5,
+      "slave_id": 1,
+      "start_register": 0,
+      "stopbits": 1,
+      "timeout_s": 0.5
     },
     "sample_interval_s": 1,
     "sim_seed": 1,
     "stats_interval_s": 600
   },
   "storage": {
-    "duration_s": 20,
+    "duration_s": 60,
     "enabled": true,
     "filename_format": "{display_name}_{ts}.tdms",
-    "interval_s": 600,
-    "output_dir": "data"
+    "interval_s": 300,
+    "output_dir": "data",
+    "retention_months": 3
   }
 }

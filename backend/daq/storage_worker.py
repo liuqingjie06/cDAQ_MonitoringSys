@@ -1,5 +1,6 @@
 import threading
 import time
+import shutil
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -20,6 +21,7 @@ class StorageService:
         out_dir = cfg.get("output_dir") or (Path(__file__).resolve().parent.parent / "data")
         self.output_dir = Path(out_dir)
         self.filename_format = cfg.get("filename_format") or "{display_name}_{ts}.tdms"
+        self.retention_months = int(cfg.get("retention_months", 3))
 
         self._thread = None
         self._stop = threading.Event()
@@ -57,6 +59,11 @@ class StorageService:
     def _run_once(self):
         ts = datetime.now(timezone.utc)  # store as UTC so viewers show local correctly
         ts_str = ts.strftime("%d%m%y_%H%M%S")
+        # Cleanup old TDMS based on retention
+        try:
+            self._cleanup_old_tdms(ts)
+        except Exception as e:
+            print("[storage] cleanup error:", e)
         for name, dev in (self.device_manager.devices or {}).items():
             snap = dev.capture_snapshot(self.duration_s)
             if not snap or not snap.get("data"):
@@ -138,3 +145,34 @@ class StorageService:
             writer.write_segment(channels)
 
         print(f"[storage] wrote {path}")
+
+    def _cleanup_old_tdms(self, now: datetime):
+        """Remove TDMS month folders older than retention_months."""
+        if not self.retention_months or self.retention_months <= 0:
+            return
+        try:
+            curr = now.astimezone()
+        except Exception:
+            curr = datetime.now()
+        curr_val = curr.year * 12 + curr.month
+        cutoff = curr_val - (self.retention_months - 1)
+        if not self.output_dir.exists():
+            return
+        for month_dir in self.output_dir.iterdir():
+            if not month_dir.is_dir():
+                continue
+            name = month_dir.name
+            if len(name) != 6 or not name.isdigit():
+                continue
+            try:
+                y = int(name[:4])
+                m = int(name[4:6])
+                val = y * 12 + m
+            except Exception:
+                continue
+            if val < cutoff:
+                try:
+                    shutil.rmtree(month_dir)
+                    print(f"[storage] removed old TDMS dir: {month_dir}")
+                except Exception as e:
+                    print(f"[storage] failed to remove {month_dir}: {e}")

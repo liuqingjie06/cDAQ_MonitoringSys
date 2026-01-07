@@ -12,12 +12,13 @@ class AnalysisWorker:
     """
     Consumes sample batches, performs stats + fatigue analysis, writes logs via DamageLogger.
     """
-    def __init__(self, device_name, sample_rate, log_interval, damage_logger, channels_cfg=None):
+    def __init__(self, device_name, sample_rate, log_interval, damage_logger, channels_cfg=None, disp_method="fft"):
         self.device_name = device_name
         self.sample_rate = sample_rate
         self.log_interval = log_interval
         self.damage_logger = damage_logger
         self.channels_cfg = channels_cfg or []
+        self.disp_method = disp_method
 
         self.queue = queue.Queue(maxsize=3)
         self.thread = None
@@ -27,6 +28,7 @@ class AnalysisWorker:
         self.log_stats = []
         self.analysis_buffers = [[] for _ in (self.channels_cfg or [None, None])]
         self.last_fatigue = None
+        self.last_chunk_len = None
 
     def start(self):
         if self.running:
@@ -69,7 +71,7 @@ class AnalysisWorker:
             except Exception:
                 pass
 
-    def _compute_disp_stats(self):
+    def _compute_disp_stats(self, window_sec: float | None = None):
         disp_stats = []
         for idx, arr in enumerate(self.analysis_buffers):
             if not arr:
@@ -80,10 +82,16 @@ class AnalysisWorker:
                 unit = (self.channels_cfg[idx].get("unit") or "").lower()
             except Exception:
                 unit = ""
-            data = np.asarray(arr, dtype=float)
+            # Use full window (log_interval) by default; optionally limit if window_sec is provided.
+            if window_sec is not None and self.sample_rate > 0:
+                max_samples = int(self.sample_rate * window_sec)
+                sliced = arr[-max_samples:] if len(arr) > max_samples else arr
+            else:
+                sliced = arr
+            data = np.asarray(sliced, dtype=float)
             if unit == "g":
                 data = data * 9.80665
-            disp = acc_to_disp(data, fs=self.sample_rate)
+            disp = acc_to_disp(data, fs=self.sample_rate, method=self.disp_method)
             if disp.size:
                 dmax = float(np.max(disp))
                 dmin = float(np.min(disp))
@@ -120,6 +128,11 @@ class AnalysisWorker:
 
             now = time.time()
             self._accumulate_stats(data)
+            try:
+                if data and len(data[0]):
+                    self.last_chunk_len = len(data[0])
+            except Exception:
+                pass
 
             # accumulate for fatigue on ch0/ch1
             if len(data) >= 2:
@@ -140,7 +153,8 @@ class AnalysisWorker:
                         ax, ay,
                         fs=self.sample_rate,
                         k_disp2stress=90.62 / 0.4,
-                        et=2.05e5
+                        et=2.05e5,
+                        disp_method=self.disp_method
                     )
                     import datetime
                     fatigue["timestamp"] = datetime.datetime.fromtimestamp(now).isoformat()
@@ -153,15 +167,21 @@ class AnalysisWorker:
                 except Exception as e:
                     print(f"[{self.device_name}] fatigue error:", e)
 
+                # compute displacement stats for this window
+                try:
+                    disp_stats = self._compute_disp_stats()
+                except Exception:
+                    disp_stats = []
+
                 self.damage_logger.write_window(
                     device_name=self.device_name,
                     stats=self.log_stats,
+                    disp_stats=disp_stats,
                     fatigue=fatigue,
                     start_ts=start_ts
                 )
 
                 try:
-                    disp_stats = self._compute_disp_stats()
                     cum = self.damage_logger.cum_damage or []
                     cum_phi = self.damage_logger.cum_phi or []
                     payload = {

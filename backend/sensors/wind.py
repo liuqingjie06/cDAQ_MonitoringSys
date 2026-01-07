@@ -8,6 +8,8 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any, Deque, Dict, Optional, Tuple
 
+import serial
+
 
 @dataclass
 class WindSample:
@@ -78,20 +80,133 @@ class Rs485WindSensor(WindSensorBase):
       - port: "COM3"
       - baudrate: 9600
       - slave_id: 1
+      - bytesize: 8
+      - parity: "N"
+      - stopbits: 1
+      - timeout_s: 0.5
       - protocol: "modbus_rtu"
       - registers: { speed: 0x0000, direction: 0x0001 }
 
-    Implementation intentionally left as a stub until hardware is available.
+    Implements Modbus RTU read for 5 registers (default) from register 0x0000.
     """
 
     def __init__(self, cfg: Dict[str, Any]):
         self.cfg = cfg
+        self._ser: Optional[serial.Serial] = None
+
+    @staticmethod
+    def _crc16(data: bytes) -> bytes:
+        crc = 0xFFFF
+        for pos in data:
+            crc ^= pos
+            for _ in range(8):
+                if (crc & 1) != 0:
+                    crc >>= 1
+                    crc ^= 0xA001
+                else:
+                    crc >>= 1
+        return crc.to_bytes(2, "little")
+
+    @staticmethod
+    def _parity(value: str) -> str:
+        key = str(value or "N").strip().upper()
+        if key in ("E", "EVEN"):
+            return serial.PARITY_EVEN
+        if key in ("O", "ODD"):
+            return serial.PARITY_ODD
+        return serial.PARITY_NONE
+
+    @staticmethod
+    def _stopbits(value: float) -> float:
+        if float(value) >= 2:
+            return serial.STOPBITS_TWO
+        return serial.STOPBITS_ONE
 
     def connect(self) -> bool:
-        return False
+        if self._ser and self._ser.is_open:
+            return True
+        port = self.cfg.get("port", "COM3")
+        baudrate = int(self.cfg.get("baudrate", 9600))
+        bytesize = int(self.cfg.get("bytesize", 8))
+        parity = self._parity(self.cfg.get("parity", "N"))
+        stopbits = self._stopbits(self.cfg.get("stopbits", 1))
+        timeout_s = float(self.cfg.get("timeout_s", 0.5))
+        try:
+            self._ser = serial.Serial(
+                port=port,
+                baudrate=baudrate,
+                bytesize=bytesize,
+                parity=parity,
+                stopbits=stopbits,
+                timeout=timeout_s,
+            )
+        except Exception:
+            self._ser = None
+            return False
+        try:
+            self._ser.reset_input_buffer()
+        except Exception:
+            pass
+        return True
+
+    def close(self) -> None:
+        if self._ser:
+            try:
+                self._ser.close()
+            except Exception:
+                pass
+        self._ser = None
+
+    def _build_request(self) -> bytes:
+        slave_id = int(self.cfg.get("slave_id", 1))
+        start_reg = int(self.cfg.get("start_register", 0))
+        reg_count = int(self.cfg.get("register_count", 5))
+        payload = bytes([
+            slave_id & 0xFF,
+            0x03,
+            (start_reg >> 8) & 0xFF,
+            start_reg & 0xFF,
+            (reg_count >> 8) & 0xFF,
+            reg_count & 0xFF,
+        ])
+        return payload + self._crc16(payload)
 
     def read(self) -> WindSample:
-        raise RuntimeError("RS485 wind sensor not implemented (no hardware connected)")
+        if not self._ser or not self._ser.is_open:
+            if not self.connect():
+                raise RuntimeError("RS485 wind sensor not connected")
+        if not self._ser:
+            raise RuntimeError("RS485 wind sensor not connected")
+
+        request = self._build_request()
+        try:
+            self._ser.reset_input_buffer()
+        except Exception:
+            pass
+        self._ser.write(request)
+        header = self._ser.read(3)
+        if len(header) != 3:
+            raise RuntimeError(f"RS485 response header length {len(header)} != 3")
+        data_len = header[2]
+        payload = self._ser.read(data_len + 2)
+        response = header + payload
+
+        if len(response) != 3 + data_len + 2:
+            raise RuntimeError(f"RS485 response length {len(response)} != {3 + data_len + 2}")
+        if response[1] != 0x03:
+            raise RuntimeError(f"RS485 response function {response[1]:02X} != 03")
+        if response[-2:] != self._crc16(response[:-2]):
+            raise RuntimeError("RS485 CRC check failed")
+
+        data = response[3:3 + data_len]
+        if len(data) < 10:
+            raise RuntimeError("RS485 response data too short")
+
+        speed_raw = (data[0] << 8) | data[1]
+        angle_raw = (data[6] << 8) | data[7]
+        speed_mps = speed_raw / 10.0
+        direction_deg = _wrap_deg(angle_raw / 10.0)
+        return WindSample(ts=time.time(), speed_mps=float(speed_mps), direction_deg=float(direction_deg))
 
 
 class WindService:
@@ -206,6 +321,11 @@ class WindService:
         counter = 0
         while self._running:
             t0 = time.time()
+            if not self.connected:
+                try:
+                    self.connected = bool(self._sensor.connect())
+                except Exception:
+                    self.connected = False
             try:
                 sample = self._sensor.read()
             except Exception:
@@ -214,6 +334,7 @@ class WindService:
                 sample = None
 
             if sample is not None:
+                self.connected = True
                 with self._lock:
                     self.last_sample = sample
                     self._window.append(sample)

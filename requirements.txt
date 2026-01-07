@@ -6,3 +6,5 @@ nidaqmx>=0.8
 numpy>=1.24
 paho-mqtt>=1.6
 nptdms>=1.10
+pyserial>=3.5
+pymodbus>=3.6

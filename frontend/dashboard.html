@@ -1,0 +1,185 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>结构监测大屏</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/dashboard.css">
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+</head>
+
+<body>
+    <div class="bg-orbit"></div>
+    <div class="bg-grid"></div>
+
+    <header class="topbar">
+        <div class="brand centered">
+            <div class="title">荆门源晗电池材料有限公司乙醇装置振动在线监测系统</div>
+        </div>
+        <div class="top-actions">
+            <div class="clock">
+                <div class="clock-label">系统时间</div>
+                <div class="clock-value" id="now-time">--:--:--</div>
+            </div>
+            <a class="ghost-btn" href="index.html">返回系统</a>
+        </div>
+    </header>
+
+    <div class="tower-tabs">
+        <button class="tower-tab active" data-tower="t1">1300-T-501</button>
+        <button class="tower-tab" data-tower="t2">1300-T-502</button>
+        <button class="tower-tab" data-tower="t3">1300-T-503</button>
+        <div class="tower-date">
+            <label for="history-date">选择日期</label>
+            <div class="tower-date-field">
+                <input type="text" id="history-date-display" class="tower-date-display" readonly>
+                <input type="date" id="history-date" class="tower-date-input">
+            </div>
+        </div>
+    </div>
+
+    <main class="dashboard-grid">
+        <section class="panel span-2">
+            <div class="panel-header">
+                <div>
+                    <h2>实时振动曲线</h2>
+                    <p class="panel-sub">最近 <span id="realtime-window-label">--</span> 秒</p>
+                </div>
+            </div>
+            <div id="realtime-vibration" class="chart realtime-chart"></div>
+        </section>
+
+        <section class="panel">
+            <div class="panel-header">
+                <div>
+                    <h2>最大振动趋势</h2>
+                    <p class="panel-sub">每 <span id="interval-label">10</span> 秒窗口统计（最大绝对值）</p>
+                </div>
+                <div class="kpi-row">
+                    <div class="kpi">
+                        <div class="kpi-label">当前窗口最大振动</div>
+                        <div class="kpi-value" id="kpi-vibration">--</div>
+                    </div>
+                    <div class="kpi meta">
+                        <div class="kpi-label">最近24小时</div>
+                        <div class="kpi-value" id="kpi-window">--</div>
+                    </div>
+                </div>
+            </div>
+            <div id="vibration-trend" class="chart"></div>
+        </section>
+
+        <section class="panel">
+            <div class="panel-header">
+                <div>
+                    <h2>最大位移趋势</h2>
+                    <p class="panel-sub">每 <span class="interval-label">10</span> 秒窗口统计（最大绝对值）</p>
+                </div>
+                <div class="kpi-row">
+                    <div class="kpi">
+                        <div class="kpi-label">当前窗口最大位移</div>
+                        <div class="kpi-value" id="kpi-displacement">--</div>
+                    </div>
+                    <div class="kpi meta">
+                        <div class="kpi-label">最近24小时</div>
+                        <div class="kpi-value" id="kpi-window-2">--</div>
+                    </div>
+                </div>
+            </div>
+            <div id="displacement-trend" class="chart"></div>
+        </section>
+
+        <section class="panel">
+            <div class="panel-header">
+                <div>
+                    <h2>振动加速度频谱</h2>
+                    <p class="panel-sub">0-5 Hz 频段</p>
+                </div>
+            </div>
+            <div id="acc-spectrum" class="chart"></div>
+        </section>
+
+        <section class="panel">
+            <div class="panel-header">
+                <div>
+                    <h2>每日最大位移</h2>
+                    <p class="panel-sub">最近 30 天统计</p>
+                </div>
+            </div>
+            <div id="daily-disp-chart" class="chart daily-chart"></div>
+        </section>
+
+        <section class="panel">
+            <div class="panel-header">
+                <div>
+                    <h2>风速风向</h2>
+                    <p class="panel-sub">实时与 10 分钟统计</p>
+                </div>
+                <span class="status-pill" id="wind-connection">未连接</span>
+            </div>
+            <div class="wind-grid">
+                <div class="wind-summary">
+                    <div class="wind-value">
+                        <span id="wind-speed">--</span>
+                        <small>m/s</small>
+                    </div>
+                    <div class="wind-dir">
+                        <span id="wind-direction">--</span>
+                        <small>°</small>
+                    </div>
+                </div>
+                <div class="wind-compass">
+                    <svg viewBox="0 0 200 200">
+                        <circle cx="100" cy="100" r="82" class="compass-ring"></circle>
+                        <circle cx="100" cy="100" r="4" class="compass-center"></circle>
+                        <g id="wind-needle">
+                            <path d="M100 20 L110 90 L100 80 L90 90 Z" class="needle-core"></path>
+                            <path d="M100 180 L110 110 L100 120 L90 110 Z" class="needle-tail"></path>
+                        </g>
+                        <text x="100" y="14" text-anchor="middle">北</text>
+                        <text x="100" y="196" text-anchor="middle">南</text>
+                        <text x="14" y="104" text-anchor="middle">西</text>
+                        <text x="186" y="104" text-anchor="middle">东</text>
+                    </svg>
+                </div>
+                <div class="wind-stats">
+                    <div><span>平均风速</span><strong id="wind-mean">--</strong></div>
+                    <div><span>最小/最大</span><strong id="wind-minmax">--</strong></div>
+                    <div><span>平均风向</span><strong id="wind-dir-mean">--</strong></div>
+                    <div><span>更新时间</span><strong id="wind-updated">--</strong></div>
+                </div>
+            </div>
+        </section>
+
+        <section class="panel">
+            <div class="panel-header">
+                <div>
+                    <h2>位移轨迹</h2>
+                    <p class="panel-sub">最近 <span id="traj-window-label">--</span> 秒位移轨迹（1s 采样）</p>
+                </div>
+                <div class="kpi-row">
+                    <div class="kpi">
+                        <div class="kpi-label">最大位移幅值</div>
+                        <div class="kpi-value" id="traj-max">--</div>
+                    </div>
+                    <div class="kpi meta">
+                        <div class="kpi-label">最大位移方向</div>
+                        <div class="kpi-value" id="traj-max-dir">--</div>
+                    </div>
+                </div>
+            </div>
+            <div id="disp-trajectory" class="chart trajectory-chart"></div>
+        </section>
+    </main>
+
+    <script src="js/dashboard.js"></script>
+</body>
+</html>
+
+
+
+

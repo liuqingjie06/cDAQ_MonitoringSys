@@ -3,7 +3,7 @@ import numpy as np
 import math
 
 
-def acc_to_disp(acc: np.ndarray, fs: float) -> np.ndarray:
+def _acc_to_disp_fft(acc: np.ndarray, fs: float) -> np.ndarray:
     """
     Double integration via FFT (per MATLAB acc2disp), suppressing low-frequency blow-up.
     """
@@ -18,8 +18,11 @@ def acc_to_disp(acc: np.ndarray, fs: float) -> np.ndarray:
 
     f = np.arange(N) * fs / N
     omega = 2 * math.pi * f
-    # 防止低频发散：omega < 0.2 Hz -> set to inf
-    omega = np.where(omega < 2 * math.pi * 0.2, np.inf, omega)
+    # 防止低频发散：omega < 0.05 Hz -> set to inf
+    omega = np.where(omega < 2 * math.pi * 0.05, np.inf, omega)
+    # 去除直流分量
+    if omega.size > 0:
+        omega[0] = np.inf
 
     U = -A / (omega ** 2)
     u = np.fft.ifft(U).real
@@ -30,6 +33,34 @@ def acc_to_disp(acc: np.ndarray, fs: float) -> np.ndarray:
     trend = p[0] * t + p[1]
     u = u - trend
     return u
+
+
+def _acc_to_disp_time(acc: np.ndarray, fs: float) -> np.ndarray:
+    """
+    Double integration in time domain with simple de-mean + detrend.
+    """
+    if acc.size == 0:
+        return acc
+    if fs <= 0:
+        return acc
+    acc = np.asarray(acc, dtype=float)
+    acc = acc - np.mean(acc)
+    vel = np.cumsum(acc) / fs
+    vel = vel - np.mean(vel)
+    disp = np.cumsum(vel) / fs
+    t = np.arange(disp.size)
+    p = np.polyfit(t, disp, 1)
+    disp = disp - (p[0] * t + p[1])
+    return disp
+
+
+def acc_to_disp(acc: np.ndarray, fs: float, method: str = "fft") -> np.ndarray:
+    """
+    Displacement from acceleration. method: "fft" or "time".
+    """
+    if method and str(method).lower() == "time":
+        return _acc_to_disp_time(acc, fs)
+    return _acc_to_disp_fft(acc, fs)
 
 
 def rainflow_ranges_counts(sig: np.ndarray):
@@ -107,12 +138,12 @@ def build_sn_curve(et: float, s_min: float = 50.0, s_max: float = 500.0, points:
     return sa.tolist(), n_vals.tolist()
 
 
-def fatigue_damage(ax: np.ndarray, ay: np.ndarray, fs: float, k_disp2stress: float, et: float):
+def fatigue_damage(ax: np.ndarray, ay: np.ndarray, fs: float, k_disp2stress: float, et: float, disp_method: str = "fft"):
     """
     Compute directional fatigue damage from two-channel acceleration.
     """
-    disp_x = acc_to_disp(ax, fs)
-    disp_y = acc_to_disp(ay, fs)
+    disp_x = acc_to_disp(ax, fs, method=disp_method)
+    disp_y = acc_to_disp(ay, fs, method=disp_method)
 
     dphi = math.radians(5)
     phi_edges = np.arange(0, 2 * math.pi + dphi, dphi)

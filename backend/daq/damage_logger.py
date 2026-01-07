@@ -159,7 +159,7 @@ class DamageLogger:
         dest_dir.mkdir(parents=True, exist_ok=True)
         return dest_dir / f"{day}.csv"
 
-    def write_window(self, device_name: str, stats: list, fatigue: dict, start_ts: float):
+    def write_window(self, device_name: str, stats: list, disp_stats: list, fatigue: dict, start_ts: float):
         """
         Persist window stats to CSV (per device, per day under device/month/day.csv).
         Header is written once per file.
@@ -175,30 +175,44 @@ class DamageLogger:
             "acc_max",
             "acc_min",
             "acc_rms",
+            "acc_p2p",
             "disp_max",
             "disp_min",
             "disp_rms",
+            "disp_p2p",
             "fatigue_Dmax",
             "fatigue_phi_deg",
             "fatigue_Sa_max",
         ]
+
+        def fmt(v):
+            if v is None:
+                return None
+            try:
+                return float(f"{float(v):.4f}")
+            except Exception:
+                return v
 
         rows = []
         for idx, st in enumerate(stats):
             if st["count"] == 0:
                 continue
             rms = (st["sumsq"] / st["count"]) ** 0.5 if st["count"] else 0.0
+            acc_p2p = (st["max"] - st["min"]) if st["count"] else 0.0
+            dstat = disp_stats[idx] if disp_stats and idx < len(disp_stats) else {}
             rows.append({
                 "timestamp": dt.strftime("%Y-%m-%d %H:%M:%S"),
                 "device": device_name,
                 "type": "stat",
                 "channel": idx,
-                "acc_max": st["max"],
-                "acc_min": st["min"],
-                "acc_rms": rms,
-                "disp_max": None,
-                "disp_min": None,
-                "disp_rms": None,
+                "acc_max": fmt(st["max"]),
+                "acc_min": fmt(st["min"]),
+                "acc_rms": fmt(rms),
+                "acc_p2p": fmt(acc_p2p),
+                "disp_max": fmt(dstat.get("max")),
+                "disp_min": fmt(dstat.get("min")),
+                "disp_rms": fmt(dstat.get("rms")),
+                "disp_p2p": fmt(dstat.get("p2p")),
                 "fatigue_Dmax": None,
                 "fatigue_phi_deg": None,
                 "fatigue_Sa_max": None,

@@ -17,12 +17,15 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "sample_rate": 2000,
     "samples_per_read": 4000,
     "fft_interval": 0.5,
+    "fft_window_s": 30.0,
+    "disp_method": "fft",
     "storage": {
         "enabled": False,
         "interval_s": 600,
         "duration_s": 30,
         "output_dir": "data",
         "filename_format": "{display_name}_{ts}.tdms",
+        "retention_months": 3,  # keep recent N months of TDMS
     },
     "wind": {
         "enabled": True,
@@ -34,6 +37,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "port": "COM3",
             "baudrate": 9600,
             "slave_id": 1,
+            "bytesize": 8,
+            "parity": "N",
+            "stopbits": 1,
+            "timeout_s": 0.5,
+            "start_register": 0,
+            "register_count": 5,
         },
     },
     "iot": {
@@ -87,6 +96,8 @@ SAMPLE_RATE = _CONFIG_CACHE.get("sample_rate")
 SAMPLES_PER_READ = _CONFIG_CACHE.get("samples_per_read")
 FFT_INTERVAL = _CONFIG_CACHE.get("fft_interval")
 EFFECTIVE_SAMPLE_RATE = _CONFIG_CACHE.get("effective_sample_rate", SAMPLE_RATE)
+FFT_WINDOW_S = _CONFIG_CACHE.get("fft_window_s", 30.0)
+DISP_METHOD = _CONFIG_CACHE.get("disp_method", "fft")
 DEFAULT_DEVICES = _CONFIG_CACHE.get("devices", {})
 WIND_CONFIG = _CONFIG_CACHE.get("wind", {})
 IOT_CONFIG = _CONFIG_CACHE.get("iot", {})
