@@ -125,7 +125,8 @@ function updateVibrationChart() {
         plot_bgcolor: "rgba(0,0,0,0)",
         xaxis: { title: "时间", type: "date", tickformat: "%H:%M", color: "#ffffff", tickfont: { color: "#ffffff" }, titlefont: { color: "#ffffff" }, gridcolor: "#7a7a7a", griddash: "dash" },
         yaxis: { title: `最大振动 (${unit})`, color: "#ffffff", tickfont: { color: "#ffffff" }, titlefont: { color: "#ffffff" }, gridcolor: "#7a7a7a", griddash: "dash" },
-        showlegend: false
+        showlegend: true,
+        legend: { font: { color: "#ffffff" } }
     }, { displayModeBar: false, responsive: true });
 }
 
@@ -282,7 +283,8 @@ function updateRealtimeVibChart() {
         plot_bgcolor: "rgba(0,0,0,0)",
         xaxis: { title: "时间 (s)", color: "#ffffff", tickfont: { color: "#ffffff" }, titlefont: { color: "#ffffff" }, gridcolor: "#7a7a7a", griddash: "dash" },
         yaxis: { title: `振动 (${unit})`, color: "#ffffff", tickfont: { color: "#ffffff" }, titlefont: { color: "#ffffff" }, gridcolor: "#7a7a7a", griddash: "dash" },
-        showlegend: false
+        showlegend: true,
+        legend: { font: { color: "#ffffff" } }
     }, { displayModeBar: false, responsive: true });
 }
 

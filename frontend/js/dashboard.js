@@ -266,7 +266,7 @@ function updateRealtimeVibChart() {
         plot_bgcolor: "rgba(0,0,0,0)",
         xaxis: { title: "时间 (s)" },
         yaxis: { title: `振动 (${unit})` },
-        showlegend: false
+        showlegend: true
     }, { displayModeBar: false, responsive: true });
 }
 
