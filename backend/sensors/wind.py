@@ -229,6 +229,8 @@ class WindService:
 
         self.last_sample: Optional[WindSample] = None
         self.last_stats: Dict[str, Any] = {}
+        self.publish_targets = []
+        self._last_stream_publish_ts = 0.0
 
         self._window: Deque[WindSample] = deque()
 
@@ -249,6 +251,9 @@ class WindService:
             self._sensor = SimulatedWindSensor(seed=self.cfg.get("sim_seed"))
 
         self.start()
+
+    def set_publish_targets(self, targets) -> None:
+        self.publish_targets = [str(t).strip() for t in (targets or []) if str(t).strip()]
 
     def start(self) -> None:
         if self._running:
@@ -348,6 +353,19 @@ class WindService:
                     "speed_mps": sample.speed_mps,
                     "direction_deg": sample.direction_deg,
                 })
+                if self.publish_targets and (sample.ts - self._last_stream_publish_ts) >= 5.0:
+                    try:
+                        from daq import iot
+                        payload = {
+                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(sample.ts)),
+                            "speed_mps": sample.speed_mps,
+                            "direction_deg": sample.direction_deg,
+                        }
+                        for name in self.publish_targets:
+                            iot.publish(payload, topic=f"{name}/stream/wind")
+                        self._last_stream_publish_ts = sample.ts
+                    except Exception:
+                        pass
 
                 counter += 1
                 if counter >= stats_every_n:

@@ -5,7 +5,6 @@ import threading
 import numpy as np
 
 from .analysis import fatigue_damage, acc_to_disp
-from . import iot
 
 
 class AnalysisWorker:
@@ -180,36 +179,6 @@ class AnalysisWorker:
                     fatigue=fatigue,
                     start_ts=start_ts
                 )
-
-                try:
-                    cum = self.damage_logger.cum_damage or []
-                    cum_phi = self.damage_logger.cum_phi or []
-                    payload = {
-                        "device": self.device_name,
-                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(now)),
-                        "channels": [
-                            {
-                                "ch": i,
-                                "acc_max": None if s["count"] == 0 else s["max"],
-                                "acc_min": None if s["count"] == 0 else s["min"],
-                                "acc_rms": None if s["count"] == 0 else (s["sumsq"] / s["count"]) ** 0.5,
-                                "acc_p2p": None if s["count"] == 0 else (s["max"] - s["min"]),
-                                "disp_max": disp_stats[i]["max"] if i < len(disp_stats) else None,
-                                "disp_min": disp_stats[i]["min"] if i < len(disp_stats) else None,
-                                "disp_rms": disp_stats[i]["rms"] if i < len(disp_stats) else None,
-                                "disp_p2p": disp_stats[i]["p2p"] if i < len(disp_stats) else None,
-                                "main_freq_hz": self._dominant_freq_hz(np.asarray(self.analysis_buffers[i], dtype=float)) if i < len(self.analysis_buffers) else None,
-                            }
-                            for i, s in enumerate(self.log_stats)
-                        ],
-                        "fatigue_cumulative": {
-                            "phi_deg_list": cum_phi,
-                            "D_phi_cum": cum,
-                        }
-                    }
-                    iot.publish(payload)
-                except Exception as e:
-                    print(f"[{self.device_name}] iot publish error:", e)
 
                 self.log_stats = []
                 self.analysis_buffers = [[] for _ in (self.channels_cfg or [None, None])]

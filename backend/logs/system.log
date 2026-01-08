@@ -609,3 +609,73 @@
 2026-01-08 18:55:37,217 | INFO | Detected device name=cDAQ3 product=cDAQ-9171 serial=30567211 ai_channels=0
 2026-01-08 18:55:37,221 | INFO | Detected device name=cDAQ3Mod1 product=NI 9230 (BNC) serial=36103754 ai_channels=3
 2026-01-08 18:55:37,222 | INFO | Config match name=cDAQ3 actual_name=cDAQ3 product=cDAQ-9171 serial=30567211 ai_channels=0 config_channels=3
+2026-01-08 20:49:33,317 | INFO | Device check start
+2026-01-08 20:49:33,318 | INFO | Configured device count=1
+2026-01-08 20:49:33,318 | INFO | Config device name=cDAQ3 model=cDAQ3Mod1 channels=3
+2026-01-08 20:49:33,543 | INFO | Detected NI-DAQmx device count=2
+2026-01-08 20:49:33,590 | INFO | Detected device name=cDAQ3 product=cDAQ-9171 serial=30567211 ai_channels=0
+2026-01-08 20:49:33,595 | INFO | Detected device name=cDAQ3Mod1 product=NI 9230 (BNC) serial=36103754 ai_channels=3
+2026-01-08 20:49:33,595 | INFO | Config match name=cDAQ3 actual_name=cDAQ3 product=cDAQ-9171 serial=30567211 ai_channels=0 config_channels=3
+2026-01-08 20:49:49,704 | INFO | Device check start
+2026-01-08 20:49:49,705 | INFO | Configured device count=1
+2026-01-08 20:49:49,705 | INFO | Config device name=cDAQ3 model=cDAQ3Mod1 channels=3
+2026-01-08 20:49:49,882 | INFO | Detected NI-DAQmx device count=2
+2026-01-08 20:49:49,925 | INFO | Detected device name=cDAQ3 product=cDAQ-9171 serial=30567211 ai_channels=0
+2026-01-08 20:49:49,931 | INFO | Detected device name=cDAQ3Mod1 product=NI 9230 (BNC) serial=36103754 ai_channels=3
+2026-01-08 20:49:49,932 | INFO | Config match name=cDAQ3 actual_name=cDAQ3 product=cDAQ-9171 serial=30567211 ai_channels=0 config_channels=3
+2026-01-08 20:50:53,857 | INFO | Device check start
+2026-01-08 20:50:53,857 | INFO | Configured device count=1
+2026-01-08 20:50:53,858 | INFO | Config device name=cDAQ3 model=cDAQ3Mod1 channels=3
+2026-01-08 20:50:54,026 | INFO | Detected NI-DAQmx device count=2
+2026-01-08 20:50:54,072 | INFO | Detected device name=cDAQ3 product=cDAQ-9171 serial=30567211 ai_channels=0
+2026-01-08 20:50:54,079 | INFO | Detected device name=cDAQ3Mod1 product=NI 9230 (BNC) serial=36103754 ai_channels=3
+2026-01-08 20:50:54,080 | INFO | Config match name=cDAQ3 actual_name=cDAQ3 product=cDAQ-9171 serial=30567211 ai_channels=0 config_channels=3
+2026-01-08 20:55:02,069 | INFO | Device check start
+2026-01-08 20:55:02,069 | INFO | Configured device count=1
+2026-01-08 20:55:02,069 | INFO | Config device name=cDAQ3 model=cDAQ3Mod1 channels=3
+2026-01-08 20:55:02,245 | INFO | Detected NI-DAQmx device count=2
+2026-01-08 20:55:02,289 | INFO | Detected device name=cDAQ3 product=cDAQ-9171 serial=30567211 ai_channels=0
+2026-01-08 20:55:02,294 | INFO | Detected device name=cDAQ3Mod1 product=NI 9230 (BNC) serial=36103754 ai_channels=3
+2026-01-08 20:55:02,296 | INFO | Config match name=cDAQ3 actual_name=cDAQ3 product=cDAQ-9171 serial=30567211 ai_channels=0 config_channels=3
+2026-01-08 20:56:55,769 | INFO | Device check start
+2026-01-08 20:56:55,769 | INFO | Configured device count=1
+2026-01-08 20:56:55,769 | INFO | Config device name=cDAQ3 model=cDAQ3Mod1 channels=3
+2026-01-08 20:56:55,941 | INFO | Detected NI-DAQmx device count=2
+2026-01-08 20:56:56,000 | INFO | Detected device name=cDAQ3 product=cDAQ-9171 serial=30567211 ai_channels=0
+2026-01-08 20:56:56,005 | INFO | Detected device name=cDAQ3Mod1 product=NI 9230 (BNC) serial=36103754 ai_channels=3
+2026-01-08 20:56:56,006 | INFO | Config match name=cDAQ3 actual_name=cDAQ3 product=cDAQ-9171 serial=30567211 ai_channels=0 config_channels=3
+2026-01-08 20:58:34,561 | INFO | Device check start
+2026-01-08 20:58:34,561 | INFO | Configured device count=1
+2026-01-08 20:58:34,561 | INFO | Config device name=cDAQ3 model=cDAQ3Mod1 channels=3
+2026-01-08 20:58:34,736 | INFO | Detected NI-DAQmx device count=2
+2026-01-08 20:58:34,775 | INFO | Detected device name=cDAQ3 product=cDAQ-9171 serial=30567211 ai_channels=0
+2026-01-08 20:58:34,780 | INFO | Detected device name=cDAQ3Mod1 product=NI 9230 (BNC) serial=36103754 ai_channels=3
+2026-01-08 20:58:34,781 | INFO | Config match name=cDAQ3 actual_name=cDAQ3 product=cDAQ-9171 serial=30567211 ai_channels=0 config_channels=3
+2026-01-08 21:11:18,147 | INFO | Device check start
+2026-01-08 21:11:18,147 | INFO | Configured device count=1
+2026-01-08 21:11:18,147 | INFO | Config device name=cDAQ3 model=cDAQ3Mod1 channels=3
+2026-01-08 21:11:18,325 | INFO | Detected NI-DAQmx device count=2
+2026-01-08 21:11:18,365 | INFO | Detected device name=cDAQ3 product=cDAQ-9171 serial=30567211 ai_channels=0
+2026-01-08 21:11:18,369 | INFO | Detected device name=cDAQ3Mod1 product=NI 9230 (BNC) serial=36103754 ai_channels=3
+2026-01-08 21:11:18,371 | INFO | Config match name=cDAQ3 actual_name=cDAQ3 product=cDAQ-9171 serial=30567211 ai_channels=0 config_channels=3
+2026-01-08 21:12:23,849 | INFO | Device check start
+2026-01-08 21:12:23,849 | INFO | Configured device count=1
+2026-01-08 21:12:23,850 | INFO | Config device name=cDAQ3 model=cDAQ3Mod1 channels=3
+2026-01-08 21:12:24,021 | INFO | Detected NI-DAQmx device count=2
+2026-01-08 21:12:24,073 | INFO | Detected device name=cDAQ3 product=cDAQ-9171 serial=30567211 ai_channels=0
+2026-01-08 21:12:24,077 | INFO | Detected device name=cDAQ3Mod1 product=NI 9230 (BNC) serial=36103754 ai_channels=3
+2026-01-08 21:12:24,078 | INFO | Config match name=cDAQ3 actual_name=cDAQ3 product=cDAQ-9171 serial=30567211 ai_channels=0 config_channels=3
+2026-01-08 21:23:09,429 | INFO | Device check start
+2026-01-08 21:23:09,429 | INFO | Configured device count=1
+2026-01-08 21:23:09,429 | INFO | Config device name=cDAQ3 model=cDAQ3Mod1 channels=3
+2026-01-08 21:23:09,622 | INFO | Detected NI-DAQmx device count=2
+2026-01-08 21:23:09,667 | INFO | Detected device name=cDAQ3 product=cDAQ-9171 serial=30567211 ai_channels=0
+2026-01-08 21:23:09,672 | INFO | Detected device name=cDAQ3Mod1 product=NI 9230 (BNC) serial=36103754 ai_channels=3
+2026-01-08 21:23:09,672 | INFO | Config match name=cDAQ3 actual_name=cDAQ3 product=cDAQ-9171 serial=30567211 ai_channels=0 config_channels=3
+2026-01-08 21:26:44,797 | INFO | Device check start
+2026-01-08 21:26:44,797 | INFO | Configured device count=1
+2026-01-08 21:26:44,797 | INFO | Config device name=cDAQ3 model=cDAQ3Mod1 channels=3
+2026-01-08 21:26:44,994 | INFO | Detected NI-DAQmx device count=2
+2026-01-08 21:26:45,045 | INFO | Detected device name=cDAQ3 product=cDAQ-9171 serial=30567211 ai_channels=0
+2026-01-08 21:26:45,050 | INFO | Detected device name=cDAQ3Mod1 product=NI 9230 (BNC) serial=36103754 ai_channels=3
+2026-01-08 21:26:45,051 | INFO | Config match name=cDAQ3 actual_name=cDAQ3 product=cDAQ-9171 serial=30567211 ai_channels=0 config_channels=3

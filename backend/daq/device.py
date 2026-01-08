@@ -5,6 +5,7 @@ from .runner import DAQRunner
 from .analysis_worker import AnalysisWorker
 from .damage_logger import DamageLogger
 from .analysis import acc_to_disp, build_sn_curve  # re-export if needed elsewhere
+from . import iot
 import numpy as np
 
 
@@ -59,6 +60,7 @@ class DAQDevice:
             for _ in self.channels
         ]
         self.last_fft_time = 0.0
+        self.last_iot_stream_time = 0.0
 
         self.damage_logger = DamageLogger(
             device_name=self.name,
@@ -174,6 +176,8 @@ class DAQDevice:
             except Exception:
                 pass
 
+        self._maybe_publish_iot()
+
         # hand off to analysis thread with decimated data
         self.analysis_worker.submit(decimated)
 
@@ -237,6 +241,108 @@ class DAQDevice:
             payload["fft"] = self._calc_fft(n)
 
         return payload
+
+    def _iot_topic_base(self) -> str:
+        base = (self.display_name or self.name or "").strip()
+        return base or self.name
+
+    def _maybe_publish_iot(self):
+        window_s = max(1.0, float(self.fft_window_s or 1.0))
+        now = time.time()
+        if now - self.last_iot_stream_time < window_s:
+            return
+
+        eff_rate = max(1, int(self.effective_sample_rate or self.sample_rate))
+        n_limit = int(eff_rate * window_s)
+        if n_limit <= 1:
+            return
+        if len(self.buffers) < 2 or len(self.buffers[0]) < n_limit or len(self.buffers[1]) < n_limit:
+            return
+
+        data_x = list(self.buffers[0])[-n_limit:]
+        data_y = list(self.buffers[1])[-n_limit:]
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(now))
+        topic_base = self._iot_topic_base()
+
+        vib_payload = {
+            "device": self.name,
+            "display_name": self.display_name,
+            "timestamp": ts,
+            "sample_rate": eff_rate,
+            "window_s": window_s,
+            "data": {"x": data_x, "y": data_y},
+        }
+        iot.publish(vib_payload, topic=f"{topic_base}/stream/vib")
+
+        disp_x = list(self.disp_buffers[0])[-n_limit:] if len(self.disp_buffers) > 0 else []
+        disp_y = list(self.disp_buffers[1])[-n_limit:] if len(self.disp_buffers) > 1 else []
+        disp_x = self._downsample_to_1hz(disp_x, eff_rate, window_s)
+        disp_y = self._downsample_to_1hz(disp_y, eff_rate, window_s)
+        disp_payload = {
+            "device": self.name,
+            "display_name": self.display_name,
+            "timestamp": ts,
+            "sample_rate": 1,
+            "window_s": window_s,
+            "data": {"x": disp_x, "y": disp_y},
+        }
+        iot.publish(disp_payload, topic=f"{topic_base}/stream/disp_track")
+
+        freq_payload = self._build_iot_freq_payload(data_x, data_y, eff_rate, ts)
+        if freq_payload:
+            iot.publish(freq_payload, topic=f"{topic_base}/stream/freq")
+
+        self.last_iot_stream_time = now
+
+    def _downsample_to_1hz(self, data, eff_rate: int, window_s: float):
+        if not data:
+            return []
+        step = int(round(eff_rate)) if eff_rate else 1
+        if step <= 1:
+            out = data
+        else:
+            out = data[::step]
+        target_len = int(window_s)
+        if target_len > 0 and len(out) > target_len:
+            out = out[-target_len:]
+        return out
+
+    def _build_iot_freq_payload(self, data_x, data_y, fs: int, timestamp: str):
+        import numpy as np
+
+        n = min(len(data_x), len(data_y))
+        if n < 2 or fs <= 0:
+            return None
+        x = np.asarray(data_x[-n:], dtype=float)
+        y = np.asarray(data_y[-n:], dtype=float)
+        win = np.hanning(n)
+        X = np.fft.rfft(x * win)
+        Y = np.fft.rfft(y * win)
+        freq = np.fft.rfftfreq(n, d=1.0 / fs)
+        if freq.size < 2:
+            return None
+
+        max_hz = 5.0
+        idx = np.where(freq <= max_hz)[0]
+        if idx.size == 0:
+            return None
+
+        df = float(freq[1] - freq[0])
+        mag_x = 20 * np.log10(np.abs(X) + 1e-12)
+        mag_y = 20 * np.log10(np.abs(Y) + 1e-12)
+
+        return {
+            "device": self.name,
+            "display_name": self.display_name,
+            "timestamp": timestamp,
+            "count": int(idx.size),
+            "df": df,
+            "fmax_hz": max_hz,
+            "values": {
+                "x": mag_x[idx].tolist(),
+                "y": mag_y[idx].tolist(),
+            },
+        }
 
     def _calc_fft(self, n: int):
         import numpy as np

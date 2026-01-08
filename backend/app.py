@@ -69,6 +69,7 @@ def _build_device_manager(cfg: dict) -> DeviceManager:
         devices_cfg=cfg.get("devices") or {},
         sys_cfg=sys_cfg,
         storage_cfg=cfg.get("storage") or {},
+        wind_service=wind_service,
     )
     # Auto-start all devices on backend launch/config reload so system runs headless.
     try:
@@ -83,10 +84,23 @@ def _apply_runtime_config(cfg: dict) -> None:
     global current_config, wind_service
     current_config = cfg
     iot.set_config(cfg.get("iot"))
+    try:
+        display_names = []
+        for name, dev_cfg in (cfg.get("devices") or {}).items():
+            display = (dev_cfg or {}).get("display_name") or name
+            if display:
+                display_names.append(display)
+        iot.set_control_display_names(display_names)
+    except Exception:
+        pass
 
     if wind_service is None:
         wind_service = WindService(socketio=socketio, cfg=cfg.get("wind"))
     wind_service.update_config(cfg.get("wind") or {})
+    try:
+        wind_service.set_publish_targets(display_names)
+    except Exception:
+        pass
 
     _build_device_manager(cfg)
 
@@ -591,6 +605,8 @@ def get_devices(_msg=None):
         "devices": devices_cfg or {},
         "status": status,
     })
+
+
 
 
 if __name__ == "__main__":

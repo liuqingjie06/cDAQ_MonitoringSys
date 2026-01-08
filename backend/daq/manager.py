@@ -87,13 +87,14 @@ def log_device_check(devices_cfg: dict) -> None:
 
 
 class DeviceManager:
-    def __init__(self, socketio, devices_cfg, sys_cfg, storage_cfg=None):
+    def __init__(self, socketio, devices_cfg, sys_cfg, storage_cfg=None, wind_service=None):
         self.socketio = socketio
         self.devices = {}
         storage_cfg = storage_cfg or {}
         storage_duration = storage_cfg.get("duration_s", 60)
         self.storage_service = None
         self.storage_cfg = storage_cfg
+        self.wind_service = wind_service
         log_device_check(devices_cfg or {})
 
         for name, dev_cfg in devices_cfg.items():
@@ -114,7 +115,7 @@ class DeviceManager:
         if storage_cfg.get("enabled"):
             try:
                 from .storage_worker import StorageService
-                self.storage_service = StorageService(self, storage_cfg)
+                self.storage_service = StorageService(self, storage_cfg, wind_service=self.wind_service)
                 self.storage_service.start()
             except Exception as e:
                 # Non-fatal: continue without storage

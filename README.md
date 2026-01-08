@@ -59,3 +59,38 @@
 - 看不到疲劳/配置接口：确认后端已运行，前端 Socket.IO 未指向 127.0.0.1。
 - data 目录未创建：运行后自动创建；未运行前目录为空属于正常。
 - 多设备混写：已按设备分目录存储，避免互相覆盖。
+\n
+
+## IoT rules (stream/data/control)
+Topics are based on device display name (example: "1300-T-501").
+Payload are
+{"display_name":"1300-T-501","timestamp":"2025-01-01T12:00:00","enabled":false}
+
+### Stream topics (sent only when remote control enables streaming)
+- `{display_name}/stream/vib` (every `fft_window_s`, e.g. 120s)
+  - payload: `device`, `display_name`, `timestamp`, `sample_rate`, `window_s`, `data.x[]`, `data.y[]`
+- `{display_name}/stream/disp_track` (every `fft_window_s`, 1 Hz downsample, 120 points for 120s)
+  - payload: `device`, `display_name`, `timestamp`, `sample_rate=1`, `window_s`, `data.x[]`, `data.y[]`
+- `{display_name}/stream/freq` (every `fft_window_s`, 0-5 Hz)
+  - payload: `device`, `display_name`, `timestamp`, `count`, `df`, `fmax_hz`, `values.x[]`, `values.y[]`
+- `{display_name}/stream/wind` (every 5s)
+  - payload: `timestamp`, `speed_mps`, `direction_deg`
+
+### Data topics (sent every `storage.interval_s`, stats window is `storage.duration_s`)
+- `{display_name}/data/vib`
+  - payload: `device`, `display_name`, `timestamp`, `interval_s`, `window_s`, `channels[].acc_max/min/p2p/rms`
+- `{display_name}/data/disp` (main channel by largest absolute peak)
+  - payload: `device`, `display_name`, `timestamp`, `interval_s`, `window_s`, `main_channel`, `disp_max/min/p2p/rms`
+- `{display_name}/data/fatigure`
+  - payload: `device`, `display_name`, `timestamp`, `interval_s`, `fatigue_cumulative.phi_deg_list`, `fatigue_cumulative.D_phi_cum`
+- `{display_name}/data/wind`
+  - payload: `timestamp`, `interval_s`, `speed_mean/max/min`, `direction_mean_deg`, `n`
+
+### Stream control (MQTT)
+Remote server should publish control messages to:
+- `{display_name}/control/stream`
+Payload example:
+```
+{"display_name":"1300-T-501","timestamp":"2025-01-01T12:00:00","enabled":true}
+```
+Only messages with matching `display_name` and a valid `timestamp` are accepted.
