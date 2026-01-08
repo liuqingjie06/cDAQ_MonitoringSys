@@ -74,10 +74,10 @@
     "stats_interval_s": 600
   },
   "storage": {
-    "duration_s": 60,
+    "duration_s": 120,
     "enabled": true,
     "filename_format": "{display_name}_{ts}.tdms",
-    "interval_s": 300,
+    "interval_s": 1800,
     "output_dir": "data",
     "retention_months": 3
   }
