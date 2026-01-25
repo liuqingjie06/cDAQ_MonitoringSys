@@ -9,7 +9,7 @@ from flask_socketio import SocketIO
 
 import config as config_module
 from daq import iot
-from daq.manager import DeviceManager
+from daq.manager import DeviceManager, resolve_devices_cfg
 from sensors.wind import WindService
 
 app = Flask(__name__)
@@ -26,7 +26,7 @@ wind_service: WindService | None = None
 
 def _build_device_manager(cfg: dict) -> DeviceManager:
     """Stop any running devices and rebuild manager from config."""
-    global device_manager
+    global device_manager, current_config
     if device_manager:
         try:
             device_manager.stop_all()
@@ -64,9 +64,20 @@ def _build_device_manager(cfg: dict) -> DeviceManager:
         "fft_window_s": cfg.get("fft_window_s"),
         "disp_method": cfg.get("disp_method"),
     }
+    devices_cfg = cfg.get("devices") or {}
+    resolved_cfg, name_map = resolve_devices_cfg(devices_cfg)
+    if name_map:
+        cfg = dict(cfg)
+        cfg["devices"] = resolved_cfg
+        current_config = cfg
+        try:
+            config_module.save_config(cfg)
+        except Exception:
+            pass
+
     device_manager = DeviceManager(
         socketio=socketio,
-        devices_cfg=cfg.get("devices") or {},
+        devices_cfg=resolved_cfg,
         sys_cfg=sys_cfg,
         storage_cfg=cfg.get("storage") or {},
         wind_service=wind_service,

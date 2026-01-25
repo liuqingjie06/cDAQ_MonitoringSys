@@ -1,10 +1,9 @@
 {
-  "effective_sample_rate": 10,
+  "effective_sample_rate": 100,
   "sample_rate": 1600,
-  "samples_per_read": 3200,
+  "samples_per_read": 1600,
   "fft_interval": 60,
-  "fft_window_s": 120,
-  "disp_method": "fft",
+  "fft_window_s": 60,
   "devices": {
     "cDAQ3": {
       "channels": [
@@ -39,7 +38,7 @@
           "remark": "Y-axis"
         }
       ],
-      "display_name": "1300-T-501",
+      "display_name": "1300-T-505",
       "model": "cDAQ3Mod1"
     }
   },
@@ -57,7 +56,7 @@
   },
   "wind": {
     "enabled": true,
-    "mode": "rs485",
+    "mode": "sim",
     "rs485": {
       "baudrate": 9600,
       "bytesize": 8,

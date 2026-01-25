@@ -126,6 +126,7 @@ const subscribed = new Set();
 let fatigueData = {};
 let spectrumScale = "linear";
 const spectrumCache = {};
+const dispTrajCache = {};
 let spectrumMaxHz = 5;
 let systemStatus = {};
 let currentDataPath = "";
@@ -584,16 +585,7 @@ function setStatus(msg, isError) {
 ===================================================== */
 function renderSpectrum(device, freq = [], spectra = []) {
     spectrumCache[device] = { freq, spectra };
-    const container = document.getElementById("spectrum-container");
-    let chart = document.getElementById(`spectrum-${device}`);
-    if (!chart) {
-        chart = document.createElement("div");
-        chart.id = `spectrum-${device}`;
-        chart.style.width = "100%";
-        chart.style.height = "280px";
-        chart.style.marginBottom = "16px";
-        container.appendChild(chart);
-    }
+    const { chart } = ensureSpectrumBlock(device);
     let plotFreq = freq;
     let plotSpectra = spectra;
     const maxHz = Number(spectrumMaxHz);
@@ -621,6 +613,7 @@ function renderSpectrum(device, freq = [], spectra = []) {
         xaxis: { title: "Frequency (Hz)", type: spectrumScale === "log" ? "log" : "linear" },
         yaxis: { title: "Magnitude (dB)" }
     }, { displayModeBar: false });
+    renderDispTrajectory(device);
 }
 
 function setSpectrumScale(scale) {
@@ -636,6 +629,102 @@ function setSpectrumMaxHz(value) {
     Object.entries(spectrumCache).forEach(([dev, data]) => {
         renderSpectrum(dev, data.freq, data.spectra);
     });
+}
+
+function ensureSpectrumBlock(device) {
+    const container = document.getElementById("spectrum-container");
+    let wrapper = document.getElementById(`spectrum-wrap-${device}`);
+    if (!wrapper) {
+        wrapper = document.createElement("div");
+        wrapper.id = `spectrum-wrap-${device}`;
+        wrapper.className = "mb-3";
+        const title = document.createElement("div");
+        title.className = "text-muted small mb-1";
+        title.textContent = `${getDeviceLabel(device)} 频谱/位移轨迹`;
+        wrapper.appendChild(title);
+        container.appendChild(wrapper);
+    }
+
+    let chart = document.getElementById(`spectrum-${device}`);
+    if (!chart) {
+        chart = document.createElement("div");
+        chart.id = `spectrum-${device}`;
+        chart.className = "card shadow-sm";
+        chart.style.width = "100%";
+        chart.style.height = "280px";
+        chart.style.marginBottom = "12px";
+        wrapper.appendChild(chart);
+    }
+
+    let traj = document.getElementById(`disp-traj-${device}`);
+    if (!traj) {
+        traj = document.createElement("div");
+        traj.id = `disp-traj-${device}`;
+        traj.className = "card shadow-sm";
+        traj.style.width = "100%";
+        traj.style.height = "260px";
+        wrapper.appendChild(traj);
+    }
+
+    return { chart, traj };
+}
+
+function updateDispTrajectoryCache(device, dispData) {
+    if (!Array.isArray(dispData) || dispData.length < 2) return;
+    const dispX = Array.isArray(dispData[0]) ? dispData[0] : [];
+    const dispY = Array.isArray(dispData[1]) ? dispData[1] : [];
+    if (!dispX.length || !dispY.length) return;
+
+    const fs = configData.effective_sample_rate || configData.sample_rate || deviceStatus[device]?.actual_rate || 1;
+    const winSec = Number(configData.fft_window_s || 30);
+    const maxPoints = Math.max(2, Math.round(fs * winSec));
+    const n = Math.min(dispX.length, dispY.length);
+    const start = Math.max(0, n - maxPoints);
+    dispTrajCache[device] = {
+        x: dispX.slice(start, start + maxPoints),
+        y: dispY.slice(start, start + maxPoints),
+    };
+}
+
+function setDispTrajectoryWindow(device, dispTraj) {
+    if (!Array.isArray(dispTraj) || dispTraj.length < 2) return;
+    const dispX = Array.isArray(dispTraj[0]) ? dispTraj[0] : [];
+    const dispY = Array.isArray(dispTraj[1]) ? dispTraj[1] : [];
+    if (!dispX.length || !dispY.length) return;
+    dispTrajCache[device] = { x: dispX, y: dispY };
+}
+
+function renderDispTrajectory(device) {
+    const data = dispTrajCache[device];
+    if (!data || !data.x || !data.y || !data.x.length || !data.y.length) return;
+    const { traj } = ensureSpectrumBlock(device);
+
+    const points = [];
+    const n = Math.min(data.x.length, data.y.length);
+    for (let i = 0; i < n; i += 1) {
+        const x = Number(data.x[i]);
+        const y = Number(data.y[i]);
+        if (Number.isFinite(x) && Number.isFinite(y)) {
+            points.push([x, y]);
+        }
+    }
+    if (points.length < 2) {
+        traj.textContent = "等待位移轨迹...";
+        return;
+    }
+    const xs = points.map(p => p[0]);
+    const ys = points.map(p => p[1]);
+
+    Plotly.react(traj, [{
+        x: xs,
+        y: ys,
+        mode: "lines",
+        line: { width: 1.2, color: "#198754" }
+    }], {
+        margin: { t: 20, b: 40, l: 60, r: 20 },
+        xaxis: { title: "X 位移 (m)" },
+        yaxis: { title: "Y 位移 (m)", scaleanchor: "x", scaleratio: 1 }
+    }, { displayModeBar: false });
 }
 
 function renderConfigForm() {
@@ -672,9 +761,10 @@ function renderConfigForm() {
             </div>
             <div class="col-12 col-md-4">
                 <label class="form-label">位移积分方法 disp_method</label>
-                <select id="cfg-disp-method" class="form-select form-select-sm">
-                    <option value="fft" ${(String(configData.disp_method || "fft").toLowerCase() === "fft") ? "selected" : ""}>频域 FFT</option>
-                    <option value="time" ${(String(configData.disp_method || "fft").toLowerCase() === "time") ? "selected" : ""}>时域积分</option>
+                <select id="cfg-disp-method" class="form-select form-select-sm" disabled>
+                    <option value="fft" ${(String(configData.disp_method || "kf").toLowerCase() === "fft") ? "selected" : ""}>频域 FFT</option>
+                    <option value="time" ${(String(configData.disp_method || "kf").toLowerCase() === "time") ? "selected" : ""}>时域积分</option>
+                    <option value="kf" ${(String(configData.disp_method || "kf").toLowerCase() === "kf") ? "selected" : ""}>卡曼滤波</option>
                 </select>
             </div>
         </div>
@@ -905,7 +995,6 @@ function readConfigForm() {
         samples_per_read: Number(document.getElementById("cfg-samples-per-read")?.value || 0),
         fft_interval: Number(document.getElementById("cfg-fft-interval")?.value || 0),
         fft_window_s: Number(document.getElementById("cfg-fft-window")?.value || 0),
-        disp_method: (document.getElementById("cfg-disp-method")?.value || (configData.disp_method || "fft")).toLowerCase(),
         devices: {},
         iot: configData.iot,
         wind: (() => {
@@ -1472,6 +1561,10 @@ function ensureStreamListener(deviceName) {
     if (subscribed.has(deviceName)) return;
     socket.on(`stream_${deviceName}`, updatePlotsFromPayload);
     socket.on(`spectrum_${deviceName}`, payload => {
+        if (payload?.disp_traj && Array.isArray(payload.disp_traj)) {
+            const dev = payload.device || deviceName;
+            setDispTrajectoryWindow(dev, payload.disp_traj);
+        }
         renderSpectrum(payload.device, payload.freq, payload.spectra);
     });
     subscribed.add(deviceName);
@@ -1499,6 +1592,7 @@ function renderDevices() {
     const container = document.getElementById("devices-container");
     container.innerHTML = "";
     document.getElementById("spectrum-container").innerHTML = "";
+    Object.keys(dispTrajCache).forEach(key => delete dispTrajCache[key]);
 
     Object.entries(deviceConfigs).forEach(([name, cfg]) => {
         ensureStreamListener(name);

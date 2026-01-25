@@ -4,7 +4,7 @@ from collections import deque
 from .runner import DAQRunner
 from .analysis_worker import AnalysisWorker
 from .damage_logger import DamageLogger
-from .analysis import acc_to_disp, build_sn_curve  # re-export if needed elsewhere
+from .analysis import acc_to_disp, build_sn_curve, disp_freq_domain_window, Accel2DispKF  # re-export if needed elsewhere
 from . import iot
 import numpy as np
 
@@ -35,7 +35,7 @@ class DAQDevice:
         self.samples_per_read = samples_per_read
         self.fft_interval = fft_interval
         self.fft_window_s = float(fft_window_s) if fft_window_s else 30.0
-        self.disp_method = disp_method or "fft"
+        self.disp_method = disp_method or "kf"
         self.decimation = max(1, int(round(self.sample_rate / max(1, self.effective_sample_rate))))
         self._decim_kernel = None
         self._decim_state = [np.zeros(0, dtype=float) for _ in self.channels]
@@ -52,6 +52,15 @@ class DAQDevice:
             deque(maxlen=buf_len)
             for _ in self.channels
         ]
+        disp_win_len = max(128, int(eff_rate * self.fft_window_s))
+        self._disp_acc_windows = [
+            deque(maxlen=disp_win_len)
+            for _ in self.channels
+        ]
+        self._disp_kf = [
+            Accel2DispKF(fs=max(1, eff_rate), wavelet_interval_s=self.fft_window_s)
+            for _ in self.channels
+        ]
         # ring buffers for storage snapshots (decimated)
         self.storage_duration_s = max(1.0, float(storage_duration_s))
         eff_rate = max(1, int(self.effective_sample_rate or self.sample_rate))
@@ -60,6 +69,7 @@ class DAQDevice:
             for _ in self.channels
         ]
         self.last_fft_time = 0.0
+        self.last_spectrum_time = 0.0
         self.last_iot_stream_time = 0.0
 
         self.damage_logger = DamageLogger(
@@ -140,8 +150,10 @@ class DAQDevice:
         # update buffers for streaming using decimated data
         for i, ch_data in enumerate(decimated):
             self.buffers[i].extend(ch_data)
-        # compute displacement on raw data, then downsample to match effective rate
-        for i, ch_data in enumerate(data):
+        # compute displacement on decimated data using a rolling FFT window (block-aligned)
+        eff_rate = max(1, int(self.effective_sample_rate or self.sample_rate))
+        disp_method = (self.disp_method or "").lower()
+        for i, ch_data in enumerate(decimated):
             try:
                 arr = np.asarray(ch_data, dtype=float)
                 if arr.size == 0:
@@ -153,12 +165,35 @@ class DAQDevice:
                     unit = ""
                 if unit == "g":
                     arr = arr * 9.80665
-                disp_raw = acc_to_disp(arr, fs=self.sample_rate, method=self.disp_method)
-                if self.decimation > 1:
-                    disp_dec = disp_raw[:: self.decimation]
+
+                if disp_method == "fft":
+                    for v in arr:
+                        self._disp_acc_windows[i].append(float(v))
+                    win = np.asarray(self._disp_acc_windows[i], dtype=float)
+                    n_fft = self._disp_acc_windows[i].maxlen or 0
+                    block_len = arr.size
+                    if eff_rate <= 0 or win.size < max(128, n_fft):
+                        disp_block = np.zeros(block_len, dtype=float)
+                    else:
+                        disp_win = disp_freq_domain_window(
+                            win,
+                            fs=eff_rate,
+                            fc_hp=0.03,
+                            win_name="hann",
+                        )
+                        if disp_win.size >= block_len:
+                            disp_block = disp_win[-block_len:]
+                        else:
+                            disp_block = np.zeros(block_len, dtype=float)
+                            disp_block[-disp_win.size:] = disp_win
+                elif disp_method == "kf":
+                    disp_block = self._disp_kf[i].step_block(arr)
                 else:
-                    disp_dec = disp_raw
-                self.disp_buffers[i].extend(disp_dec.tolist() if hasattr(disp_dec, "tolist") else list(disp_dec))
+                    disp_block = acc_to_disp(arr, fs=eff_rate, method=self.disp_method)
+
+                self.disp_buffers[i].extend(
+                    disp_block.tolist() if hasattr(disp_block, "tolist") else list(disp_block)
+                )
             except Exception:
                 pass
         # update storage buffers using decimated data
@@ -170,9 +205,12 @@ class DAQDevice:
             self.socketio.emit(f"stream_{self.name}", payload)
             # send FFT (magnitude) for first two channels if available
             try:
-                fft_payload = self._build_fft_payload(decimated)
-                if fft_payload:
-                    self.socketio.emit(f"spectrum_{self.name}", fft_payload)
+                now = time.time()
+                if self.fft_interval <= 0 or (now - self.last_spectrum_time) >= self.fft_interval:
+                    fft_payload = self._build_fft_payload(decimated)
+                    if fft_payload:
+                        self.socketio.emit(f"spectrum_{self.name}", fft_payload)
+                        self.last_spectrum_time = now
             except Exception:
                 pass
 
@@ -189,6 +227,15 @@ class DAQDevice:
         self.decimation = max(1, int(round(actual / target)))
         self._decim_kernel = self._build_decimation_kernel()
         self._decim_state = [np.zeros(0, dtype=float) for _ in self.channels]
+        disp_win_len = max(128, int(target * self.fft_window_s))
+        self._disp_acc_windows = [
+            deque(maxlen=disp_win_len)
+            for _ in self.channels
+        ]
+        self._disp_kf = [
+            Accel2DispKF(fs=max(1, target), wavelet_interval_s=self.fft_window_s)
+            for _ in self.channels
+        ]
 
     def _build_decimation_kernel(self):
         if self.decimation <= 1:
@@ -307,6 +354,20 @@ class DAQDevice:
             out = out[-target_len:]
         return out
 
+    def _highpass_window(self, data, fs: int, fc_hz: float):
+        if data is None:
+            return np.asarray([], dtype=float)
+        x = np.asarray(data, dtype=float)
+        if x.size < 2 or fs <= 0 or fc_hz <= 0:
+            return x
+        dt = 1.0 / float(fs)
+        rc = 1.0 / (2.0 * np.pi * float(fc_hz))
+        alpha = rc / (rc + dt)
+        y = np.zeros_like(x)
+        for i in range(1, x.size):
+            y[i] = alpha * (y[i - 1] + x[i] - x[i - 1])
+        return y
+
     def _build_iot_freq_payload(self, data_x, data_y, fs: int, timestamp: str):
         import numpy as np
 
@@ -388,10 +449,19 @@ class DAQDevice:
             if freq is None:
                 freq = np.fft.rfftfreq(arr.size, d=1.0 / fs).tolist()
             spectra.append(mag.tolist())
+        disp_traj = []
+        if len(self.disp_buffers) >= 2:
+            disp_x = np.asarray(list(self.disp_buffers[0])[-n_fft:], dtype=float)
+            disp_y = np.asarray(list(self.disp_buffers[1])[-n_fft:], dtype=float)
+            if disp_x.size >= 2 and disp_y.size >= 2:
+                disp_x = self._highpass_window(disp_x, fs, 0.05)
+                disp_y = self._highpass_window(disp_y, fs, 0.05)
+                disp_traj = [disp_x.tolist(), disp_y.tolist()]
         return {
             "device": self.name,
             "freq": freq if freq is not None else [],
             "spectra": spectra,
+            "disp_traj": disp_traj,
         }
 
     def get_fatigue_snapshot(self):

@@ -86,6 +86,59 @@ def log_device_check(devices_cfg: dict) -> None:
         )
 
 
+def resolve_devices_cfg(devices_cfg: dict) -> tuple[dict, dict]:
+    """
+    Resolve config device names to detected NI-DAQmx chassis names when possible.
+    Returns (resolved_cfg, name_map).
+    """
+    if not devices_cfg:
+        return devices_cfg, {}
+
+    logger = get_logger("device_check")
+    try:
+        from nidaqmx.system import System
+    except Exception:
+        return devices_cfg, {}
+
+    try:
+        system = System.local()
+        devices = list(system.devices)
+    except Exception:
+        return devices_cfg, {}
+
+    detected_names = [n for n in (_safe_attr(d, "name", "") for d in devices) if n]
+    chassis_names = [n for n in detected_names if "Mod" not in n]
+
+    resolved = {}
+    name_map = {}
+
+    for name, cfg in (devices_cfg or {}).items():
+        if name in detected_names:
+            resolved[name] = cfg
+            continue
+
+        mapped = None
+        model = cfg.get("model", "")
+        if model and model in detected_names and "Mod" in model:
+            mapped = model.split("Mod")[0]
+        elif len(devices_cfg) == 1 and len(chassis_names) == 1:
+            mapped = chassis_names[0]
+
+        if mapped and mapped not in resolved:
+            new_cfg = dict(cfg)
+            if model and model not in detected_names:
+                mod_name = f"{mapped}Mod1"
+                if mod_name in detected_names:
+                    new_cfg["model"] = mod_name
+            resolved[mapped] = new_cfg
+            name_map[name] = mapped
+            logger.info("Auto-mapped config device name %s -> %s", name, mapped)
+        else:
+            resolved[name] = cfg
+
+    return resolved, name_map
+
+
 class DeviceManager:
     def __init__(self, socketio, devices_cfg, sys_cfg, storage_cfg=None, wind_service=None):
         self.socketio = socketio
