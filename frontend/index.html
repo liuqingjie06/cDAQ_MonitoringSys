@@ -640,7 +640,7 @@ function ensureSpectrumBlock(device) {
         wrapper.className = "mb-3";
         const title = document.createElement("div");
         title.className = "text-muted small mb-1";
-        title.textContent = `${getDeviceLabel(device)} 频谱/位移轨迹`;
+        title.textContent = `${getDeviceLabel(device)} 频谱/位移时程`;
         wrapper.appendChild(title);
         container.appendChild(wrapper);
     }
@@ -698,32 +698,35 @@ function renderDispTrajectory(device) {
     const data = dispTrajCache[device];
     if (!data || !data.x || !data.y || !data.x.length || !data.y.length) return;
     const { traj } = ensureSpectrumBlock(device);
-
-    const points = [];
     const n = Math.min(data.x.length, data.y.length);
-    for (let i = 0; i < n; i += 1) {
-        const x = Number(data.x[i]);
-        const y = Number(data.y[i]);
-        if (Number.isFinite(x) && Number.isFinite(y)) {
-            points.push([x, y]);
-        }
-    }
-    if (points.length < 2) {
-        traj.textContent = "等待位移轨迹...";
+    if (n < 2) {
+        traj.textContent = "等待位移时程...";
         return;
     }
-    const xs = points.map(p => p[0]);
-    const ys = points.map(p => p[1]);
+    const fs = configData.effective_sample_rate || configData.sample_rate || deviceStatus[device]?.actual_rate || 1;
+    const dt = fs > 0 ? (1 / fs) : 1;
+    const t = Array.from({ length: n }, (_, i) => i * dt);
 
-    Plotly.react(traj, [{
-        x: xs,
-        y: ys,
-        mode: "lines",
-        line: { width: 1.2, color: "#198754" }
-    }], {
+    Plotly.react(traj, [
+        {
+            x: t,
+            y: data.x.slice(0, n),
+            mode: "lines",
+            line: { width: 1.2, color: "#198754" },
+            name: "X"
+        },
+        {
+            x: t,
+            y: data.y.slice(0, n),
+            mode: "lines",
+            line: { width: 1.2, color: "#0d6efd" },
+            name: "Y"
+        }
+    ], {
         margin: { t: 20, b: 40, l: 60, r: 20 },
-        xaxis: { title: "X 位移 (m)" },
-        yaxis: { title: "Y 位移 (m)", scaleanchor: "x", scaleratio: 1 }
+        xaxis: { title: "时间 (s)" },
+        yaxis: { title: "位移 (m)" },
+        legend: { orientation: "h", x: 0.4, y: 1.15 }
     }, { displayModeBar: false });
 }
 

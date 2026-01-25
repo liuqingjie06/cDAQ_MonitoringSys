@@ -76,7 +76,8 @@ class StorageService:
         except Exception as e:
             print("[storage] cleanup error:", e)
         for name, dev in (self.device_manager.devices or {}).items():
-            snap = dev.capture_snapshot(self.duration_s)
+            window_s = float(getattr(dev, "fft_window_s", self.duration_s) or self.duration_s)
+            snap = dev.capture_snapshot(window_s)
             if not snap or not snap.get("data"):
                 continue
             try:
@@ -84,7 +85,7 @@ class StorageService:
             except Exception as e:
                 print(f"[storage] write error for {name}:", e)
             try:
-                self._publish_iot_data(ts, dev, snap)
+                self._publish_iot_data(ts, dev, snap, window_s)
             except Exception as e:
                 print(f"[storage] iot publish error for {name}:", e)
 
@@ -93,16 +94,16 @@ class StorageService:
         except Exception as e:
             print("[storage] wind publish error:", e)
 
-    def _publish_iot_data(self, ts: datetime, dev, snap: dict):
+    def _publish_iot_data(self, ts: datetime, dev, snap: dict, window_s: float):
         topic_base = (dev.display_name or dev.name or "").strip() or dev.name
         timestamp = ts.astimezone().strftime("%Y-%m-%dT%H:%M:%S")
         interval_s = float(self.interval_s)
 
-        vib_payload = self._build_vib_stats_payload(dev, snap, timestamp, interval_s, self.duration_s)
+        vib_payload = self._build_vib_stats_payload(dev, snap, timestamp, interval_s, window_s)
         if vib_payload:
             iot.publish(vib_payload, topic=f"{topic_base}/data/vib")
 
-        disp_payload = self._build_disp_stats_payload(dev, snap, timestamp, interval_s, self.duration_s)
+        disp_payload = self._build_disp_stats_payload(dev, snap, timestamp, interval_s, window_s)
         if disp_payload:
             iot.publish(disp_payload, topic=f"{topic_base}/data/disp")
 
@@ -179,7 +180,10 @@ class StorageService:
                     disp_stats.append({"max": None, "min": None, "rms": None, "p2p": None})
                     continue
                 series = list(buf)[-n_limit:] if n_limit > 0 else list(buf)
-                arr = np.asarray(series, dtype=float)
+                if hasattr(dev, "_poly2_detrend"):
+                    arr = dev._poly2_detrend(series)
+                else:
+                    arr = np.asarray(series, dtype=float)
                 if arr.size == 0:
                     disp_stats.append({"max": None, "min": None, "rms": None, "p2p": None})
                     continue

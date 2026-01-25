@@ -11,13 +11,23 @@ class AnalysisWorker:
     """
     Consumes sample batches, performs stats + fatigue analysis, writes logs via DamageLogger.
     """
-    def __init__(self, device_name, sample_rate, log_interval, damage_logger, channels_cfg=None, disp_method="fft"):
+    def __init__(
+        self,
+        device_name,
+        sample_rate,
+        log_interval,
+        damage_logger,
+        channels_cfg=None,
+        disp_method="fft",
+        disp_window_s: float | None = None,
+    ):
         self.device_name = device_name
         self.sample_rate = sample_rate
         self.log_interval = log_interval
         self.damage_logger = damage_logger
         self.channels_cfg = channels_cfg or []
         self.disp_method = disp_method
+        self.disp_window_s = float(disp_window_s) if disp_window_s else None
 
         self.queue = queue.Queue(maxsize=3)
         self.thread = None
@@ -71,6 +81,8 @@ class AnalysisWorker:
                 pass
 
     def _compute_disp_stats(self, window_sec: float | None = None):
+        if window_sec is None:
+            window_sec = self.disp_window_s
         disp_stats = []
         for idx, arr in enumerate(self.analysis_buffers):
             if not arr:
@@ -168,7 +180,7 @@ class AnalysisWorker:
 
                 # compute displacement stats for this window
                 try:
-                    disp_stats = self._compute_disp_stats()
+                    disp_stats = self._compute_disp_stats(self.disp_window_s)
                 except Exception:
                     disp_stats = []
 

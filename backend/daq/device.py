@@ -88,6 +88,7 @@ class DAQDevice:
             damage_logger=self.damage_logger,
             channels_cfg=self.channels,
             disp_method=self.disp_method,
+            disp_window_s=self.fft_window_s,
         )
         self.runner = DAQRunner(
             name=self.name,
@@ -217,7 +218,8 @@ class DAQDevice:
             # send FFT (magnitude) for first two channels if available
             try:
                 now = time.time()
-                if self.fft_interval <= 0 or (now - self.last_spectrum_time) >= self.fft_interval:
+                spectrum_interval = max(1.0, float(self.fft_window_s or 1.0))
+                if (now - self.last_spectrum_time) >= spectrum_interval:
                     fft_payload = self._build_fft_payload(decimated)
                     if fft_payload:
                         self.socketio.emit(f"spectrum_{self.name}", fft_payload)
@@ -292,7 +294,11 @@ class DAQDevice:
             n_limit = int(eff_rate * self.fft_window_s)
             for buf in self.disp_buffers[:2]:
                 series = list(buf)[-n_limit:] if n_limit > 0 else list(buf)
-                disp.append(self._detrend_linear(series).tolist() if series else [])
+                if series:
+                    clean = self._poly2_detrend(series)
+                    disp.append(clean.tolist())
+                else:
+                    disp.append([])
             payload["displacement"] = disp
         except Exception:
             payload["displacement"] = []
@@ -338,8 +344,10 @@ class DAQDevice:
 
         disp_x = list(self.disp_buffers[0])[-n_limit:] if len(self.disp_buffers) > 0 else []
         disp_y = list(self.disp_buffers[1])[-n_limit:] if len(self.disp_buffers) > 1 else []
-        disp_x = self._detrend_linear(disp_x).tolist() if disp_x else disp_x
-        disp_y = self._detrend_linear(disp_y).tolist() if disp_y else disp_y
+        if disp_x:
+            disp_x = self._poly2_detrend(disp_x).tolist()
+        if disp_y:
+            disp_y = self._poly2_detrend(disp_y).tolist()
         disp_x = self._downsample_to_1hz(disp_x, eff_rate, window_s)
         disp_y = self._downsample_to_1hz(disp_y, eff_rate, window_s)
         disp_payload = {
@@ -392,6 +400,15 @@ class DAQDevice:
         t = np.arange(x.size, dtype=float)
         p = np.polyfit(t, x, 1)
         return x - (p[0] * t + p[1])
+
+    def _poly2_detrend(self, data):
+        x = np.asarray(data, dtype=float)
+        if x.size < 3:
+            return x
+        t = np.arange(x.size, dtype=float)
+        p = np.polyfit(t, x, 2)
+        baseline = p[0] * t * t + p[1] * t + p[2]
+        return x - baseline
 
     def _highpass_iir_block(self, data, fs: int, fc_hz: float, state: dict):
         if data is None:
@@ -527,8 +544,8 @@ class DAQDevice:
             disp_x = np.asarray(list(self.disp_buffers[0])[-n_fft:], dtype=float)
             disp_y = np.asarray(list(self.disp_buffers[1])[-n_fft:], dtype=float)
             if disp_x.size >= 2 and disp_y.size >= 2:
-                disp_x = self._highpass_window(disp_x, fs, 0.05)
-                disp_y = self._highpass_window(disp_y, fs, 0.05)
+                disp_x = self._poly2_detrend(disp_x)
+                disp_y = self._poly2_detrend(disp_y)
                 disp_traj = [disp_x.tolist(), disp_y.tolist()]
         return {
             "device": self.name,
@@ -612,7 +629,11 @@ class DAQDevice:
             arr = list(buf)
             if count and len(arr) > count:
                 arr = arr[-count:]
-            disp_data.append(self._detrend_linear(arr).tolist() if arr else arr)
+            if arr:
+                clean = self._poly2_detrend(arr)
+                disp_data.append(clean.tolist())
+            else:
+                disp_data.append(arr)
         return {
             "device": self.name,
             "display_name": self.display_name,

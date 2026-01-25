@@ -142,7 +142,7 @@ class Accel2DispKF:
         self,
         fs: float,
         sigma_a: float = 0.05,
-        sigma_b: float = 1e-6,
+        sigma_b: float = 1e-4,
         sigma_x_pseudo: float = 2,
         wavelet_interval_s: float | None = None,
         wavelet: str = "db6",
