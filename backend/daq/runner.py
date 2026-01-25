@@ -27,6 +27,7 @@ class DAQRunner:
         self.task = None
         self.running = False
         self.thread = None
+        self._task_lock = threading.Lock()
 
     def _add_channel(self, task, ch: dict):
         ch_id = ch["id"]
@@ -60,17 +61,25 @@ class DAQRunner:
         if self.running:
             return
 
-        self.task = nidaqmx.Task()
-        for ch in self.channels_cfg:
-            if not ch.get("enabled", True):
-                continue
-            self._add_channel(self.task, ch)
+        with self._task_lock:
+            if self.task:
+                try:
+                    self.task.stop()
+                    self.task.close()
+                except Exception:
+                    pass
+                self.task = None
+            self.task = nidaqmx.Task()
+            for ch in self.channels_cfg:
+                if not ch.get("enabled", True):
+                    continue
+                self._add_channel(self.task, ch)
 
-        self.task.timing.cfg_samp_clk_timing(
-            rate=self.sample_rate,
-            sample_mode=AcquisitionType.CONTINUOUS,
-            samps_per_chan=self.samples_per_read * 5,
-        )
+            self.task.timing.cfg_samp_clk_timing(
+                rate=self.sample_rate,
+                sample_mode=AcquisitionType.CONTINUOUS,
+                samps_per_chan=self.samples_per_read * 5,
+            )
 
         self.running = True
         self.thread = threading.Thread(target=self._loop, daemon=True)
@@ -84,25 +93,37 @@ class DAQRunner:
 
     def stop(self):
         self.running = False
-        if self.task:
+        with self._task_lock:
+            task = self.task
+        if task:
             try:
-                self.task.stop()
-                self.task.close()
+                task.stop()
             except Exception:
                 pass
-            self.task = None
         if self.thread:
             self.thread.join(timeout=2.0)
             self.thread = None
+        with self._task_lock:
+            task = self.task
+            self.task = None
+        if task:
+            try:
+                task.close()
+            except Exception:
+                pass
         print(f"[{self.name}] DAQ stopped")
 
     def _loop(self):
         while self.running:
             try:
+                with self._task_lock:
+                    task = self.task
+                if task is None:
+                    break
                 # Timeout scaled to requested chunk duration to avoid -200284 when chunk spans >1s
                 chunk_sec = self.samples_per_read / float(self.sample_rate) if self.sample_rate else 1.0
                 read_timeout = max(1.0, chunk_sec * 2.0)
-                data = self.task.read(
+                data = task.read(
                     number_of_samples_per_channel=self.samples_per_read,
                     timeout=read_timeout
                 )
@@ -113,12 +134,14 @@ class DAQRunner:
                 # Stop local loop without blocking on self.stop() (to avoid self-join deadlock)
                 self.running = False
                 try:
-                    if self.task:
-                        self.task.stop()
-                        self.task.close()
+                    if task:
+                        task.stop()
+                        task.close()
                 except Exception:
                     pass
-                self.task = None
+                with self._task_lock:
+                    if self.task is task:
+                        self.task = None
                 break
             # small yield
             time.sleep(0.0)

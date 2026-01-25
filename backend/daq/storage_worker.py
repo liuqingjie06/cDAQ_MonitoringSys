@@ -168,31 +168,52 @@ class StorageService:
             return None
         ch_cfgs = snap.get("channels") or []
         disp_stats = []
-        for idx, ch_data in enumerate(data):
-            arr = np.asarray(ch_data, dtype=float)
-            if arr.size == 0:
-                disp_stats.append({"max": None, "min": None, "rms": None, "p2p": None})
-                continue
-            unit = ""
-            try:
-                unit = (ch_cfgs[idx].get("unit") or "").lower()
-            except Exception:
-                unit = ""
-            if unit == "g":
-                arr = arr * 9.80665
+        use_filtered = hasattr(dev, "disp_buffers") and getattr(dev, "disp_buffers", None)
+        if use_filtered:
             fs = snap.get("effective_sample_rate") or snap.get("sample_rate")
             if not fs:
-                disp_stats.append({"max": None, "min": None, "rms": None, "p2p": None})
-                continue
-            disp = acc_to_disp(arr, fs=fs, method=getattr(dev, "disp_method", "fft"))
-            if disp.size:
-                dmax = float(np.max(disp))
-                dmin = float(np.min(disp))
-                rms = float(np.sqrt(np.mean(disp ** 2)))
+                return None
+            n_limit = int(float(fs) * float(window_s))
+            for idx, buf in enumerate(dev.disp_buffers):
+                if not buf:
+                    disp_stats.append({"max": None, "min": None, "rms": None, "p2p": None})
+                    continue
+                series = list(buf)[-n_limit:] if n_limit > 0 else list(buf)
+                arr = np.asarray(series, dtype=float)
+                if arr.size == 0:
+                    disp_stats.append({"max": None, "min": None, "rms": None, "p2p": None})
+                    continue
+                dmax = float(np.max(arr))
+                dmin = float(np.min(arr))
+                rms = float(np.sqrt(np.mean(arr ** 2)))
                 p2p = float(dmax - dmin)
                 disp_stats.append({"max": dmax, "min": dmin, "rms": rms, "p2p": p2p})
-            else:
-                disp_stats.append({"max": None, "min": None, "rms": None, "p2p": None})
+        else:
+            for idx, ch_data in enumerate(data):
+                arr = np.asarray(ch_data, dtype=float)
+                if arr.size == 0:
+                    disp_stats.append({"max": None, "min": None, "rms": None, "p2p": None})
+                    continue
+                unit = ""
+                try:
+                    unit = (ch_cfgs[idx].get("unit") or "").lower()
+                except Exception:
+                    unit = ""
+                if unit == "g":
+                    arr = arr * 9.80665
+                fs = snap.get("effective_sample_rate") or snap.get("sample_rate")
+                if not fs:
+                    disp_stats.append({"max": None, "min": None, "rms": None, "p2p": None})
+                    continue
+                disp = acc_to_disp(arr, fs=fs, method=getattr(dev, "disp_method", "fft"))
+                if disp.size:
+                    dmax = float(np.max(disp))
+                    dmin = float(np.min(disp))
+                    rms = float(np.sqrt(np.mean(disp ** 2)))
+                    p2p = float(dmax - dmin)
+                    disp_stats.append({"max": dmax, "min": dmin, "rms": rms, "p2p": p2p})
+                else:
+                    disp_stats.append({"max": None, "min": None, "rms": None, "p2p": None})
 
         main_idx = 0
         if disp_stats:
@@ -247,7 +268,8 @@ class StorageService:
             iot.publish(payload, topic=f"{topic_base}/data/wind")
 
     def _write_tdms(self, ts: datetime, ts_str: str, snap: dict):
-        data = snap.get("data") or []
+        use_disp = bool(snap.get("disp_data"))
+        data = snap.get("disp_data") if use_disp else (snap.get("data") or [])
         if not any(len(ch) for ch in data):
             return
         display_name = snap.get("display_name") or snap.get("device") or "device"
@@ -274,19 +296,19 @@ class StorageService:
         for idx, ch_data in enumerate(data):
             try:
                 ch_id = ch_cfgs[idx].get("id", idx)
-                unit = ch_cfgs[idx].get("unit", "")
+                unit = "m" if use_disp else ch_cfgs[idx].get("unit", "")
                 remark = ch_cfgs[idx].get("remark", "")
                 sensitivity = ch_cfgs[idx].get("sensitivity")
                 coupling = ch_cfgs[idx].get("coupling")
-                ch_type = ch_cfgs[idx].get("type")
+                ch_type = "disp_filtered" if use_disp else ch_cfgs[idx].get("type")
                 iepe = ch_cfgs[idx].get("iepe")
             except Exception:
                 ch_id = idx
-                unit = ""
+                unit = "m" if use_disp else ""
                 remark = ""
                 sensitivity = None
                 coupling = None
-                ch_type = None
+                ch_type = "disp_filtered" if use_disp else None
                 iepe = None
             ch_name = f"CH{ch_id}"
             arr = np.asarray(ch_data, dtype=float)

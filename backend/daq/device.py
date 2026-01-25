@@ -52,13 +52,18 @@ class DAQDevice:
             deque(maxlen=buf_len)
             for _ in self.channels
         ]
+        self.disp_hp_fc_hz = 0.1
         disp_win_len = max(128, int(eff_rate * self.fft_window_s))
         self._disp_acc_windows = [
             deque(maxlen=disp_win_len)
             for _ in self.channels
         ]
         self._disp_kf = [
-            Accel2DispKF(fs=max(1, eff_rate), wavelet_interval_s=self.fft_window_s)
+            Accel2DispKF(fs=max(1, eff_rate), wavelet_interval_s=0.0)
+            for _ in self.channels
+        ]
+        self._disp_hp_state = [
+            {"x_prev": 0.0, "y_prev": 0.0, "initialized": False}
             for _ in self.channels
         ]
         # ring buffers for storage snapshots (decimated)
@@ -188,6 +193,12 @@ class DAQDevice:
                             disp_block[-disp_win.size:] = disp_win
                 elif disp_method == "kf":
                     disp_block = self._disp_kf[i].step_block(arr)
+                    disp_block = self._highpass_iir_block(
+                        disp_block,
+                        fs=eff_rate,
+                        fc_hz=self.disp_hp_fc_hz,
+                        state=self._disp_hp_state[i],
+                    )
                 else:
                     disp_block = acc_to_disp(arr, fs=eff_rate, method=self.disp_method)
 
@@ -233,7 +244,11 @@ class DAQDevice:
             for _ in self.channels
         ]
         self._disp_kf = [
-            Accel2DispKF(fs=max(1, target), wavelet_interval_s=self.fft_window_s)
+            Accel2DispKF(fs=max(1, target), wavelet_interval_s=0.0)
+            for _ in self.channels
+        ]
+        self._disp_hp_state = [
+            {"x_prev": 0.0, "y_prev": 0.0, "initialized": False}
             for _ in self.channels
         ]
 
@@ -276,8 +291,8 @@ class DAQDevice:
             disp = []
             n_limit = int(eff_rate * self.fft_window_s)
             for buf in self.disp_buffers[:2]:
-                n = min(n_limit, len(buf))
-                disp.append(list(buf)[-n:] if n > 0 else [])
+                series = list(buf)[-n_limit:] if n_limit > 0 else list(buf)
+                disp.append(self._detrend_linear(series).tolist() if series else [])
             payload["displacement"] = disp
         except Exception:
             payload["displacement"] = []
@@ -323,6 +338,8 @@ class DAQDevice:
 
         disp_x = list(self.disp_buffers[0])[-n_limit:] if len(self.disp_buffers) > 0 else []
         disp_y = list(self.disp_buffers[1])[-n_limit:] if len(self.disp_buffers) > 1 else []
+        disp_x = self._detrend_linear(disp_x).tolist() if disp_x else disp_x
+        disp_y = self._detrend_linear(disp_y).tolist() if disp_y else disp_y
         disp_x = self._downsample_to_1hz(disp_x, eff_rate, window_s)
         disp_y = self._downsample_to_1hz(disp_y, eff_rate, window_s)
         disp_payload = {
@@ -366,6 +383,40 @@ class DAQDevice:
         y = np.zeros_like(x)
         for i in range(1, x.size):
             y[i] = alpha * (y[i - 1] + x[i] - x[i - 1])
+        return y
+
+    def _detrend_linear(self, data):
+        x = np.asarray(data, dtype=float)
+        if x.size < 3:
+            return x
+        t = np.arange(x.size, dtype=float)
+        p = np.polyfit(t, x, 1)
+        return x - (p[0] * t + p[1])
+
+    def _highpass_iir_block(self, data, fs: int, fc_hz: float, state: dict):
+        if data is None:
+            return np.asarray([], dtype=float)
+        x = np.asarray(data, dtype=float)
+        if x.size < 1 or fs <= 0 or fc_hz <= 0:
+            return x
+        dt = 1.0 / float(fs)
+        rc = 1.0 / (2.0 * np.pi * float(fc_hz))
+        alpha = rc / (rc + dt)
+        y = np.zeros_like(x)
+        if not state.get("initialized", False):
+            state["x_prev"] = float(x[0])
+            state["y_prev"] = 0.0
+            state["initialized"] = True
+        x_prev = float(state.get("x_prev", 0.0))
+        y_prev = float(state.get("y_prev", 0.0))
+        for i in range(x.size):
+            xi = float(x[i])
+            yi = alpha * (y_prev + xi - x_prev)
+            y[i] = yi
+            x_prev = xi
+            y_prev = yi
+        state["x_prev"] = x_prev
+        state["y_prev"] = y_prev
         return y
 
     def _build_iot_freq_payload(self, data_x, data_y, fs: int, timestamp: str):
@@ -529,11 +580,17 @@ class DAQDevice:
         eff_rate = self.effective_sample_rate or self.sample_rate
         count = int(duration_s * eff_rate)
         data = []
+        disp_data = []
         for buf in self.storage_buffers:
             arr = list(buf)
             if count and len(arr) > count:
                 arr = arr[-count:]
             data.append(arr)
+        for buf in self.disp_buffers:
+            arr = list(buf)
+            if count and len(arr) > count:
+                arr = arr[-count:]
+            disp_data.append(self._detrend_linear(arr).tolist() if arr else arr)
         return {
             "device": self.name,
             "display_name": self.display_name,
@@ -541,4 +598,6 @@ class DAQDevice:
             "effective_sample_rate": eff_rate,
             "channels": self.channels,
             "data": data,
+            "disp_data": disp_data,
+            "disp_filtered": True,
         }
