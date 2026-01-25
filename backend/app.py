@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import datetime
+import time
 from pathlib import Path
 from flask import Flask, jsonify, request, send_from_directory
 from flask_socketio import SocketIO
@@ -32,6 +33,7 @@ def _build_device_manager(cfg: dict) -> DeviceManager:
             device_manager.stop_all()
         except Exception:
             pass
+        time.sleep(0.5)
 
     requested_rate = cfg.get("sample_rate") or 0
     try:

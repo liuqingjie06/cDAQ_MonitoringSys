@@ -294,11 +294,7 @@ class DAQDevice:
             n_limit = int(eff_rate * self.fft_window_s)
             for buf in self.disp_buffers[:2]:
                 series = list(buf)[-n_limit:] if n_limit > 0 else list(buf)
-                if series:
-                    clean = self._poly2_detrend(series)
-                    disp.append(clean.tolist())
-                else:
-                    disp.append([])
+                disp.append(self._detrend_linear(series).tolist() if series else [])
             payload["displacement"] = disp
         except Exception:
             payload["displacement"] = []
@@ -344,10 +340,8 @@ class DAQDevice:
 
         disp_x = list(self.disp_buffers[0])[-n_limit:] if len(self.disp_buffers) > 0 else []
         disp_y = list(self.disp_buffers[1])[-n_limit:] if len(self.disp_buffers) > 1 else []
-        if disp_x:
-            disp_x = self._poly2_detrend(disp_x).tolist()
-        if disp_y:
-            disp_y = self._poly2_detrend(disp_y).tolist()
+        disp_x = self._detrend_linear(disp_x).tolist() if disp_x else disp_x
+        disp_y = self._detrend_linear(disp_y).tolist() if disp_y else disp_y
         disp_x = self._downsample_to_1hz(disp_x, eff_rate, window_s)
         disp_y = self._downsample_to_1hz(disp_y, eff_rate, window_s)
         disp_payload = {
@@ -401,14 +395,127 @@ class DAQDevice:
         p = np.polyfit(t, x, 1)
         return x - (p[0] * t + p[1])
 
-    def _poly2_detrend(self, data):
-        x = np.asarray(data, dtype=float)
-        if x.size < 3:
+    def _freq_domain_integration(self, acc_data, fs: int, cut_off: float = 0.05):
+        x = np.asarray(acc_data, dtype=float)
+        if x.size < 3 or fs <= 0:
             return x
-        t = np.arange(x.size, dtype=float)
-        p = np.polyfit(t, x, 2)
-        baseline = p[0] * t * t + p[1] * t + p[2]
-        return x - baseline
+        x = x - np.mean(x)
+        freqs = np.fft.rfftfreq(x.size, d=1.0 / fs)
+        acc_fft = np.fft.rfft(x)
+        omega = 2.0 * np.pi * freqs
+        with np.errstate(divide="ignore", invalid="ignore"):
+            disp_fft = acc_fft / (-(omega ** 2))
+        if cut_off > 0:
+            disp_fft[freqs < cut_off] = 0
+        return np.fft.irfft(disp_fft, n=x.size)
+
+    def _segment_poly_detrend(
+        self,
+        data,
+        fs: int,
+        window_s: float,
+        order: int = 2,
+        overlap: float = 0.5,
+    ):
+        x = np.asarray(data, dtype=float)
+        if x.size < 3 or fs <= 0 or window_s <= 0:
+            return x
+        n_seg = int(window_s * fs)
+        if n_seg < 3:
+            return x
+        if x.size <= n_seg:
+            t = np.arange(x.size, dtype=float)
+            coeffs = np.polyfit(t, x, deg=order)
+            trend = np.polyval(coeffs, t)
+            return x - trend
+
+        step = max(1, int(n_seg * (1.0 - overlap)))
+        pad = n_seg // 2
+        x_pad = np.pad(x, (pad, pad), mode="edge")
+        acc = np.zeros_like(x_pad, dtype=float)
+        wsum = np.zeros_like(x_pad, dtype=float)
+        for start in range(0, x_pad.size, step):
+            end = min(x_pad.size, start + n_seg)
+            seg = x_pad[start:end]
+            if seg.size < 3:
+                break
+            t = np.arange(seg.size, dtype=float)
+            coeffs = np.polyfit(t, seg, deg=order)
+            trend = np.polyval(coeffs, t)
+            detrended = seg - trend
+            w = np.hanning(seg.size)
+            acc[start:end] += detrended * w
+            wsum[start:end] += w
+            if end >= x_pad.size:
+                break
+
+        valid = wsum > 0
+        out_pad = x_pad.copy()
+        out_pad[valid] = acc[valid] / wsum[valid]
+        return out_pad[pad : pad + x.size]
+
+    def _wavelet_detrend(self, data, fs: int):
+        x = np.asarray(data, dtype=float)
+        if x.size < 3 or fs <= 0:
+            return x
+        h_low = np.array(
+            [
+                0.03489756,
+                0.16322305,
+                0.28444446,
+                0.15875271,
+                -0.10759062,
+                -0.0669027,
+                0.05451848,
+                0.0188232,
+            ],
+            dtype=float,
+        )
+        h_high = np.array(
+            [
+                -0.0188232,
+                0.05451848,
+                0.0669027,
+                -0.10759062,
+                -0.15875271,
+                0.28444446,
+                -0.16322305,
+                0.03489756,
+            ],
+            dtype=float,
+        )
+
+        def downsample_convolve(signal, kernel):
+            res = np.convolve(signal, kernel, mode="same")
+            return res[::2]
+
+        def upsample_convolve(signal, kernel):
+            upsampled = np.zeros(len(signal) * 2, dtype=float)
+            upsampled[::2] = signal
+            return np.convolve(upsampled, kernel, mode="same")
+
+        max_levels = int(np.floor(np.log2(x.size))) - 1
+        levels = max(1, min(5, max_levels))
+        current_a = x
+        details = []
+        for _ in range(levels):
+            a_next = downsample_convolve(current_a, h_low)
+            d_next = downsample_convolve(current_a, h_high)
+            details.append(d_next)
+            current_a = a_next
+
+        reconstructed = current_a * 0.7
+        for i in reversed(range(levels)):
+            up_a = upsample_convolve(reconstructed, h_low[::-1])
+            up_d = upsample_convolve(details[i], h_high[::-1])
+            n = min(len(up_a), len(up_d))
+            reconstructed = up_a[:n] + up_d[:n]
+
+        if len(reconstructed) > len(x):
+            return reconstructed[: len(x)]
+        if len(reconstructed) < len(x):
+            return np.pad(reconstructed, (0, len(x) - len(reconstructed)), mode="edge")
+        return reconstructed
 
     def _highpass_iir_block(self, data, fs: int, fc_hz: float, state: dict):
         if data is None:
@@ -544,8 +651,9 @@ class DAQDevice:
             disp_x = np.asarray(list(self.disp_buffers[0])[-n_fft:], dtype=float)
             disp_y = np.asarray(list(self.disp_buffers[1])[-n_fft:], dtype=float)
             if disp_x.size >= 2 and disp_y.size >= 2:
-                disp_x = self._poly2_detrend(disp_x)
-                disp_y = self._poly2_detrend(disp_y)
+                seg_s = max(5.0, min(30.0, float(self.fft_window_s or 1.0) / 3.0))
+                disp_x = self._segment_poly_detrend(disp_x, fs, seg_s, order=3, overlap=0.75)
+                disp_y = self._segment_poly_detrend(disp_y, fs, seg_s, order=3, overlap=0.75)
                 disp_traj = [disp_x.tolist(), disp_y.tolist()]
         return {
             "device": self.name,
@@ -630,7 +738,8 @@ class DAQDevice:
             if count and len(arr) > count:
                 arr = arr[-count:]
             if arr:
-                clean = self._poly2_detrend(arr)
+                seg_s = max(5.0, min(30.0, float(self.fft_window_s or 1.0) / 3.0))
+                clean = self._segment_poly_detrend(arr, eff_rate, seg_s, order=3, overlap=0.75)
                 disp_data.append(clean.tolist())
             else:
                 disp_data.append(arr)

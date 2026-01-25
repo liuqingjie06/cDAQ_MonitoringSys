@@ -142,7 +142,7 @@ class Accel2DispKF:
         self,
         fs: float,
         sigma_a: float = 0.05,
-        sigma_b: float = 1e-4,
+        sigma_b: float = 1e-6,
         sigma_x_pseudo: float = 2,
         wavelet_interval_s: float | None = None,
         wavelet: str = "db6",
@@ -194,6 +194,7 @@ class Accel2DispKF:
         self.x[1, 0] = v_val
 
     def step_block(self, acc_block: np.ndarray) -> np.ndarray:
+        acc_block = np.asarray(acc_block, dtype=float)
         out = np.zeros(len(acc_block))
         I = np.eye(3)
         for i, a_meas in enumerate(acc_block):

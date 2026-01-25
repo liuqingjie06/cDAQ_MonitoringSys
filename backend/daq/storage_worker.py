@@ -169,21 +169,18 @@ class StorageService:
             return None
         ch_cfgs = snap.get("channels") or []
         disp_stats = []
-        use_filtered = hasattr(dev, "disp_buffers") and getattr(dev, "disp_buffers", None)
+        use_filtered = bool(snap.get("disp_data"))
         if use_filtered:
             fs = snap.get("effective_sample_rate") or snap.get("sample_rate")
             if not fs:
                 return None
             n_limit = int(float(fs) * float(window_s))
-            for idx, buf in enumerate(dev.disp_buffers):
-                if not buf:
+            for idx, series in enumerate(snap.get("disp_data") or []):
+                if not series:
                     disp_stats.append({"max": None, "min": None, "rms": None, "p2p": None})
                     continue
-                series = list(buf)[-n_limit:] if n_limit > 0 else list(buf)
-                if hasattr(dev, "_poly2_detrend"):
-                    arr = dev._poly2_detrend(series)
-                else:
-                    arr = np.asarray(series, dtype=float)
+                series = series[-n_limit:] if n_limit > 0 else series
+                arr = np.asarray(series, dtype=float)
                 if arr.size == 0:
                     disp_stats.append({"max": None, "min": None, "rms": None, "p2p": None})
                     continue
