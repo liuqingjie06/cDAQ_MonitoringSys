@@ -143,7 +143,8 @@ class Accel2DispKF:
         fs: float,
         sigma_a: float = 0.05,
         sigma_b: float = 1e-6,
-        sigma_x_pseudo: float = 2,
+        sigma_x_pseudo: float = 0.5,
+        acc_hp_fc_hz: float = 0.05,
         wavelet_interval_s: float | None = None,
         wavelet: str = "db6",
     ):
@@ -155,6 +156,8 @@ class Accel2DispKF:
             DEFAULT_WAVELET_INTERVAL_S if wavelet_interval_s is None else wavelet_interval_s
         )
         self.wavelet = wavelet
+        self.acc_hp_fc_hz = float(acc_hp_fc_hz)
+        self._acc_hp_state = {"x_prev": 0.0, "y_prev": 0.0, "initialized": False}
         self._wavelet_buf: list[float] = []
         self.set_params(fs, sigma_a, sigma_b, sigma_x_pseudo)
         self.reset()
@@ -187,13 +190,41 @@ class Accel2DispKF:
     def reset(self):
         self.x = np.zeros((3, 1))
         self.P = np.diag([0.1, 0.1, 0.01])
+        self._acc_hp_state = {"x_prev": 0.0, "y_prev": 0.0, "initialized": False}
         self._wavelet_buf = []
 
     def force_state(self, x_val: float = 0.0, v_val: float = 0.0):
         self.x[0, 0] = x_val
         self.x[1, 0] = v_val
 
+    def _highpass_acc_block(self, acc_block: np.ndarray) -> np.ndarray:
+        if acc_block.size == 0:
+            return acc_block
+        if self.acc_hp_fc_hz <= 0 or self.fs <= 0:
+            return acc_block
+        dt = self.dt
+        rc = 1.0 / (2.0 * np.pi * self.acc_hp_fc_hz)
+        alpha = rc / (rc + dt)
+        y = np.zeros_like(acc_block, dtype=float)
+        state = self._acc_hp_state
+        if not state.get("initialized", False):
+            state["x_prev"] = float(acc_block[0])
+            state["y_prev"] = 0.0
+            state["initialized"] = True
+        x_prev = float(state.get("x_prev", 0.0))
+        y_prev = float(state.get("y_prev", 0.0))
+        for i, x in enumerate(acc_block):
+            x = float(x)
+            y_i = alpha * (y_prev + x - x_prev)
+            y[i] = y_i
+            x_prev = x
+            y_prev = y_i
+        state["x_prev"] = x_prev
+        state["y_prev"] = y_prev
+        return y
+
     def step_block(self, acc_block: np.ndarray) -> np.ndarray:
+        acc_block = self._highpass_acc_block(np.asarray(acc_block, dtype=float))
         out = np.zeros(len(acc_block))
         I = np.eye(3)
         for i, a_meas in enumerate(acc_block):

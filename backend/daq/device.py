@@ -63,7 +63,7 @@ class DAQDevice:
             for _ in self.channels
         ]
         self._disp_hp_state = [
-            {"x_prev": 0.0, "y_prev": 0.0, "initialized": False}
+            {"x1": 0.0, "x2": 0.0, "y1": 0.0, "y2": 0.0, "initialized": False}
             for _ in self.channels
         ]
         # ring buffers for storage snapshots (decimated)
@@ -248,7 +248,7 @@ class DAQDevice:
             for _ in self.channels
         ]
         self._disp_hp_state = [
-            {"x_prev": 0.0, "y_prev": 0.0, "initialized": False}
+            {"x1": 0.0, "x2": 0.0, "y1": 0.0, "y2": 0.0, "initialized": False}
             for _ in self.channels
         ]
 
@@ -399,24 +399,46 @@ class DAQDevice:
         x = np.asarray(data, dtype=float)
         if x.size < 1 or fs <= 0 or fc_hz <= 0:
             return x
-        dt = 1.0 / float(fs)
-        rc = 1.0 / (2.0 * np.pi * float(fc_hz))
-        alpha = rc / (rc + dt)
+        w0 = 2.0 * np.pi * float(fc_hz) / float(fs)
+        cos_w0 = float(np.cos(w0))
+        sin_w0 = float(np.sin(w0))
+        q = 1.0 / np.sqrt(2.0)
+        alpha = sin_w0 / (2.0 * q)
+        b0 = (1.0 + cos_w0) / 2.0
+        b1 = -(1.0 + cos_w0)
+        b2 = (1.0 + cos_w0) / 2.0
+        a0 = 1.0 + alpha
+        a1 = -2.0 * cos_w0
+        a2 = 1.0 - alpha
+        b0 /= a0
+        b1 /= a0
+        b2 /= a0
+        a1 /= a0
+        a2 /= a0
+
         y = np.zeros_like(x)
         if not state.get("initialized", False):
-            state["x_prev"] = float(x[0])
-            state["y_prev"] = 0.0
+            state["x1"] = float(x[0])
+            state["x2"] = float(x[0])
+            state["y1"] = 0.0
+            state["y2"] = 0.0
             state["initialized"] = True
-        x_prev = float(state.get("x_prev", 0.0))
-        y_prev = float(state.get("y_prev", 0.0))
+        x1 = float(state.get("x1", 0.0))
+        x2 = float(state.get("x2", 0.0))
+        y1 = float(state.get("y1", 0.0))
+        y2 = float(state.get("y2", 0.0))
         for i in range(x.size):
             xi = float(x[i])
-            yi = alpha * (y_prev + xi - x_prev)
+            yi = b0 * xi + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
             y[i] = yi
-            x_prev = xi
-            y_prev = yi
-        state["x_prev"] = x_prev
-        state["y_prev"] = y_prev
+            x2 = x1
+            x1 = xi
+            y2 = y1
+            y1 = yi
+        state["x1"] = x1
+        state["x2"] = x2
+        state["y1"] = y1
+        state["y2"] = y2
         return y
 
     def _build_iot_freq_payload(self, data_x, data_y, fs: int, timestamp: str):
