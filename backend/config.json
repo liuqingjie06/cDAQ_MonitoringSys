@@ -13,7 +13,7 @@
           "coupling": "DC",
           "type": "acc",
           "unit": "g",
-          "sensitivity": 1995.115,
+          "sensitivity": 1998.813,
           "iepe": false,
           "remark": "X-axis"
         },
@@ -56,7 +56,7 @@
   },
   "wind": {
     "enabled": true,
-    "mode": "sim",
+    "mode": "rs485",
     "rs485": {
       "baudrate": 9600,
       "bytesize": 8,

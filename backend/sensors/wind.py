@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import random
+import struct
 import threading
 import time
 from collections import deque
@@ -87,7 +88,9 @@ class Rs485WindSensor(WindSensorBase):
       - protocol: "modbus_rtu"
       - registers: { speed: 0x0000, direction: 0x0001 }
 
-    Implements Modbus RTU read for 5 registers (default) from register 0x0000.
+    Implements Modbus RTU read for 2 registers at 0x9C42 from two slave IDs:
+      - slave 0x01: wind speed (signed 16-bit, scale 1000, from data[2:4])
+      - slave 0x02: wind direction (unsigned 32-bit, scale 1000, from data[0:4])
     """
 
     def __init__(self, cfg: Dict[str, Any]):
@@ -157,10 +160,7 @@ class Rs485WindSensor(WindSensorBase):
                 pass
         self._ser = None
 
-    def _build_request(self) -> bytes:
-        slave_id = int(self.cfg.get("slave_id", 1))
-        start_reg = int(self.cfg.get("start_register", 0))
-        reg_count = int(self.cfg.get("register_count", 5))
+    def _build_request(self, slave_id: int, start_reg: int, reg_count: int) -> bytes:
         payload = bytes([
             slave_id & 0xFF,
             0x03,
@@ -171,19 +171,14 @@ class Rs485WindSensor(WindSensorBase):
         ])
         return payload + self._crc16(payload)
 
-    def read(self) -> WindSample:
-        if not self._ser or not self._ser.is_open:
-            if not self.connect():
-                raise RuntimeError("RS485 wind sensor not connected")
-        if not self._ser:
-            raise RuntimeError("RS485 wind sensor not connected")
-
-        request = self._build_request()
+    def _read_regs(self, slave_id: int, start_reg: int, reg_count: int, sleep_s: float) -> bytes:
+        request = self._build_request(slave_id, start_reg, reg_count)
         try:
             self._ser.reset_input_buffer()
         except Exception:
             pass
         self._ser.write(request)
+        time.sleep(max(0.0, float(sleep_s)))
         header = self._ser.read(3)
         if len(header) != 3:
             raise RuntimeError(f"RS485 response header length {len(header)} != 3")
@@ -199,13 +194,29 @@ class Rs485WindSensor(WindSensorBase):
             raise RuntimeError("RS485 CRC check failed")
 
         data = response[3:3 + data_len]
-        if len(data) < 10:
-            raise RuntimeError("RS485 response data too short")
+        return data
 
-        speed_raw = (data[0] << 8) | data[1]
-        angle_raw = (data[6] << 8) | data[7]
-        speed_mps = speed_raw / 10.0
-        direction_deg = _wrap_deg(angle_raw / 10.0)
+    def read(self) -> WindSample:
+        if not self._ser or not self._ser.is_open:
+            if not self.connect():
+                raise RuntimeError("RS485 wind sensor not connected")
+        if not self._ser:
+            raise RuntimeError("RS485 wind sensor not connected")
+
+        start_reg = 0x9C42
+        reg_count = 2
+
+        data_speed = self._read_regs(slave_id=0x01, start_reg=start_reg, reg_count=reg_count, sleep_s=0.1)
+        if len(data_speed) != 4:
+            raise RuntimeError(f"RS485 speed data length {len(data_speed)} != 4")
+        speed_raw = struct.unpack(">h", data_speed[2:4])[0]
+        speed_mps = speed_raw / 1000.0
+
+        data_dir = self._read_regs(slave_id=0x02, start_reg=start_reg, reg_count=reg_count, sleep_s=1.0)
+        if len(data_dir) != 4:
+            raise RuntimeError(f"RS485 direction data length {len(data_dir)} != 4")
+        angle_raw = struct.unpack(">I", data_dir[0:4])[0]
+        direction_deg = _wrap_deg(angle_raw / 1000.0)
         return WindSample(ts=time.time(), speed_mps=float(speed_mps), direction_deg=float(direction_deg))
 
 
